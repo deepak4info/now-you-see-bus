@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "BusTrack.Api": {
+      "commandName": "Project",
+      "applicationUrl": "http://0.0.0.0:5088",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

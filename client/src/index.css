@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 36 46% 92%;
+  --foreground: 24 14% 10%;
+  --card: 36 100% 98%;
+  --card-foreground: 24 14% 10%;
+  --primary: 156 57% 26%;
+  --primary-foreground: 40 40% 97%;
+  --secondary: 34 32% 88%;
+  --secondary-foreground: 24 14% 14%;
+  --muted: 34 28% 90%;
+  --muted-foreground: 25 8% 36%;
+  --accent: 34 40% 86%;
+  --accent-foreground: 24 14% 12%;
+  --destructive: 8 68% 42%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 33 28% 78%;
+  --input: 33 28% 78%;
+  --ring: 156 57% 26%;
+  --radius: 0.85rem;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(216, 154, 58, 0.18), transparent 55%),
+    radial-gradient(900px 400px at 100% 0%, rgba(29, 107, 79, 0.12), transparent 50%),
+    hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: Outfit, ui-sans-serif, system-ui, sans-serif;
+}
+
+.leaflet-container {
+  font-family: Outfit, ui-sans-serif, system-ui, sans-serif;
+  background: #e7efe8;
+  height: 100%;
+  width: 100%;
+}
+
+.bus-marker {
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  background: #1b1714;
+  color: #fffaf3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 24px rgba(27, 23, 20, 0.28);
+  border: 2px solid #fffaf3;
+  position: relative;
+}
+
+.bus-marker b {
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.bus-marker i {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid #d89a3a;
+  margin-bottom: 2px;
+}
+
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #1f8a4c;
+  box-shadow: 0 0 0 0 rgba(31, 138, 76, 0.7);
+  animation: ping 1.6s infinite;
+}
+
+@keyframes ping {
+  70% { box-shadow: 0 0 0 8px rgba(31, 138, 76, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(31, 138, 76, 0); }
+}

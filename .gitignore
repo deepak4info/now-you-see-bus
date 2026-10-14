@@ -1,0 +1,12 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+node_modules/
+dist/
+.dotnet/
+*.log
+client/dist/
+.env
+.env.local
