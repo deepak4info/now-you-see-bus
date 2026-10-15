@@ -70,7 +70,7 @@ export function OverviewPage() {
       </div>
       <div className="mt-6 rounded-2xl border bg-card p-5">
         <h2 className="font-display text-2xl">{data.operationsLive ? "Operations are live" : "Operations are still closed"}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Starting operations creates today's trips from the active schedules so a driver can press start.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Starting operations opens today's trips. While the system stays live, each new morning opens the next day's trips on its own.</p>
         <Button className="mt-4" size="lg" disabled={busy} onClick={() => void start()}>
           {data.operationsLive ? "Refresh today's trips" : "Start operations"}
         </Button>

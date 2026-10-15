@@ -56,7 +56,7 @@ Passengers can search and track without an account. An account is required to sa
 ## Walk the sample day
 
 1. Sign in as admin and open Dispatch. The corridor is already loaded.
-2. Press **Start operations**. Today's trips are created and drivers can leave the depot.
+2. Press **Start operations**. Today's trips are created and drivers can leave the depot. After that, each new service day opens its own trips, including when the API restarts.
 3. Sign in as `DRV-RAHUL`. The console shows bus HR39-1020 on route 101.
 4. Press **Start trip** to send phone GPS, or **Play the Hisar–Fatehabad run** to move the bus along the route without a handset.
 5. As a passenger, search Hisar → Fatehabad. Bus 102 is listed with status, the current stop, the next stop, fare, and ETA.

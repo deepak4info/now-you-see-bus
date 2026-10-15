@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,7 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const auth = useAuth();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const current = modes.find((m) => m.id === mode)!;
 
   function pick(next: (typeof modes)[number]["id"]) {
@@ -42,8 +43,10 @@ export function LoginPage() {
     setError("");
     try {
       const user = await auth.login(login, password);
+      const next = params.get("next");
       if (user.role === "Admin") navigate("/admin");
       else if (user.role === "Driver") navigate("/driver");
+      else if (next && next.startsWith("/") && !next.startsWith("//")) navigate(next);
       else navigate("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");

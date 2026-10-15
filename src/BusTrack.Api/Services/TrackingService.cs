@@ -550,10 +550,11 @@ public class TrackingService
         decimal? fare = null;
         if (fromStop is not null && toStop is not null && fromStop.SequenceNo < toStop.SequenceNo)
         {
-            fare = await _db.FareSlabs.AsNoTracking()
-                .Where(f => f.RouteId == routeId && f.FromStopId == fromStop.StopId && f.ToStopId == toStop.StopId)
-                .Select(f => (decimal?)f.Amount)
-                .FirstOrDefaultAsync(ct);
+            fare = await FareBetween(routeId, fromStop.StopId, toStop.StopId, ct);
+        }
+        else if (string.IsNullOrWhiteSpace(from) && string.IsNullOrWhiteSpace(to) && routeStops.Count >= 2)
+        {
+            fare = await FareBetween(routeId, routeStops[0].StopId, routeStops[^1].StopId, ct);
         }
 
         if (along is null || fromStop is null)
@@ -568,6 +569,12 @@ public class TrackingService
             etaAlight = Geo.EtaMinutes(Math.Max(0, (double)toStop.DistanceFromOriginKm - along.Value), speed);
         return (fare, etaYou, boardingPassed, etaAlight);
     }
+
+    private Task<decimal?> FareBetween(int routeId, int fromStopId, int toStopId, CancellationToken ct) =>
+        _db.FareSlabs.AsNoTracking()
+            .Where(f => f.RouteId == routeId && f.FromStopId == fromStopId && f.ToStopId == toStopId)
+            .Select(f => (decimal?)f.Amount)
+            .FirstOrDefaultAsync(ct);
 
     private async Task Publish(TrackSnapshotDto snap, CancellationToken ct)
     {

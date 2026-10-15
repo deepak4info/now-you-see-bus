@@ -35,6 +35,8 @@ export function BusPage() {
         body: JSON.stringify({
           busId: live.busId,
           routeId: live.routeId,
+          fromStopId: live.stops.find((stop) => stop.name === (from || live.stops[0]?.name))?.stopId,
+          toStopId: live.stops.find((stop) => stop.name === (to || live.stops.at(-1)?.name))?.stopId,
           label: `${from || live.stops[0]?.name} → ${to || live.stops.at(-1)?.name} · Bus ${live.fleetNumber}`,
         }),
       });

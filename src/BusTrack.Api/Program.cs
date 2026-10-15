@@ -50,6 +50,13 @@ var app = builder.Build();
 
 await DbInitializer.InitializeAsync(app.Services);
 
+using (var scope = app.Services.CreateScope())
+{
+    var tracking = scope.ServiceProvider.GetRequiredService<TrackingService>();
+    if (await tracking.OperationsAreLive())
+        await tracking.MaterializeToday();
+}
+
 app.UseExceptionHandler(handler =>
 {
     handler.Run(async context =>
