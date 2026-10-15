@@ -2,6 +2,13 @@
 
 A bus tracking platform for a Haryana corridor: passengers search a trip, drivers run it, and dispatch owns the master data. The sample service is route 101, Hisar → Barwala → Tohana → Fatehabad, on bus HR39-1020 (fleet 102) at 8:00 AM with driver Rahul.
 
+`main` is the combined project. Each half also has its own branch:
+
+| Branch | Checkout gives you |
+| --- | --- |
+| `cursor/api-757a` | .NET 8 API, `database/WhereIsMyBus.sql`, and Docker SQL Server |
+| `cursor/ui-757a` | React UI only. `npm install` and `npm run dev` from the branch root |
+
 ## Stack
 
 - SQL Server schema in `database/`
