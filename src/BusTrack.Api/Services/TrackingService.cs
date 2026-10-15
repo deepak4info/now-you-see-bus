@@ -1,12 +1,15 @@
+using System.Collections.Concurrent;
 using BusTrack.Api.Data;
 using BusTrack.Api.Hubs;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace BusTrack.Api.Services;
 
 public class TrackingService
 {
+    private static readonly ConcurrentDictionary<int, SemaphoreSlim> TripGates = new();
     private readonly AppDbContext _db;
     private readonly IHubContext<TrackingHub> _hub;
 
@@ -177,6 +180,20 @@ public class TrackingService
 
     public async Task<TrackSnapshotDto> IngestAsync(int tripId, double lat, double lng, double? speed, double? heading, bool keepSimulation, CancellationToken ct = default)
     {
+        var gate = TripGates.GetOrAdd(tripId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            return await IngestCoreAsync(tripId, lat, lng, speed, heading, keepSimulation, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<TrackSnapshotDto> IngestCoreAsync(int tripId, double lat, double lng, double? speed, double? heading, bool keepSimulation, CancellationToken ct)
+    {
         var trip = await LoadTrip(tripId, ct);
         if (trip.Status != "Running")
             throw new InvalidOperationException("This trip is not running.");
@@ -199,24 +216,7 @@ public class TrackingService
         var along = path.Count == 0 ? 0 : Geo.Project(new LatLng(lat, lng), path).DistanceAlongKm;
         var displaySpeed = keepSimulation ? (double?)null : speed;
 
-        var etas = await _db.TripStopEtas.Where(e => e.TripId == trip.Id).ToListAsync(ct);
-        if (etas.Count == 0)
-        {
-            foreach (var rs in routeStops)
-            {
-                var row = new TripStopEta
-                {
-                    TripId = trip.Id,
-                    StopId = rs.StopId,
-                    SequenceNo = rs.SequenceNo,
-                    Status = "Pending",
-                    ScheduledArrival = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime)
-                        .AddMinutes(Geo.EtaMinutes((double)rs.DistanceFromOriginKm))
-                };
-                _db.TripStopEtas.Add(row);
-                etas.Add(row);
-            }
-        }
+        var etas = await EnsureStopEtas(trip, routeStops, ct);
 
         var currentIndex = -1;
         for (var i = 0; i < routeStops.Count; i++)
@@ -225,6 +225,56 @@ public class TrackingService
                 currentIndex = i;
         }
 
+        ApplyStopProgress(etas, routeStops, along, currentIndex, displaySpeed);
+
+        var last = routeStops.Count == 0 ? null : routeStops[^1];
+        var arrived = last is not null
+            && Geo.HaversineKm(lat, lng, (double)last.Stop.Latitude, (double)last.Stop.Longitude) < 0.35
+            && along + 0.4 >= (double)last.DistanceFromOriginKm;
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2627 or 2601 })
+        {
+            foreach (var entry in _db.ChangeTracker.Entries<TripStopEta>().Where(e => e.State == EntityState.Added).ToList())
+                entry.State = EntityState.Detached;
+            etas = await _db.TripStopEtas.Where(e => e.TripId == trip.Id).ToListAsync(ct);
+            ApplyStopProgress(etas, routeStops, along, currentIndex, displaySpeed);
+            await _db.SaveChangesAsync(ct);
+        }
+        if (arrived) await CompleteCore(trip, null, ct);
+
+        var snap = await BuildSnapshot(trip, null, null, ct);
+        await Publish(snap, ct);
+        return snap;
+    }
+
+    private async Task<List<TripStopEta>> EnsureStopEtas(Trip trip, List<RouteStop> routeStops, CancellationToken ct)
+    {
+        var etas = await _db.TripStopEtas.Where(e => e.TripId == trip.Id).ToListAsync(ct);
+        var seen = etas.Select(e => e.StopId).ToHashSet();
+        foreach (var rs in routeStops)
+        {
+            if (!seen.Add(rs.StopId)) continue;
+            var row = new TripStopEta
+            {
+                TripId = trip.Id,
+                StopId = rs.StopId,
+                SequenceNo = rs.SequenceNo,
+                Status = "Pending",
+                ScheduledArrival = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime)
+                    .AddMinutes(Geo.EtaMinutes((double)rs.DistanceFromOriginKm))
+            };
+            _db.TripStopEtas.Add(row);
+            etas.Add(row);
+        }
+        return etas;
+    }
+
+    private static void ApplyStopProgress(List<TripStopEta> etas, List<RouteStop> routeStops, double along, int currentIndex, double? displaySpeed)
+    {
         for (var i = 0; i < routeStops.Count; i++)
         {
             var rs = routeStops[i];
@@ -243,18 +293,6 @@ public class TrackingService
                 row.Status = i == currentIndex + 1 ? "Next" : "Pending";
             }
         }
-
-        var last = routeStops.Count == 0 ? null : routeStops[^1];
-        var arrived = last is not null
-            && Geo.HaversineKm(lat, lng, (double)last.Stop.Latitude, (double)last.Stop.Longitude) < 0.35
-            && along + 0.4 >= (double)last.DistanceFromOriginKm;
-
-        await _db.SaveChangesAsync(ct);
-        if (arrived) await CompleteCore(trip, null, ct);
-
-        var snap = await BuildSnapshot(trip, null, null, ct);
-        await Publish(snap, ct);
-        return snap;
     }
 
     public async Task<TrackSnapshotDto> EndAsync(Trip trip, Guid? userId, CancellationToken ct = default)
