@@ -1,8 +1,12 @@
 /*
     Where is my bus — SQL Server schema
-    Run this first on a database named WhereIsMyBus.
-    The API also executes this script on startup.
+    Run database/WhereIsMyBus.sql to create the database and load the sample,
+    or run this file first on a database named WhereIsMyBus, then 002_seed.sql.
+    The API also executes these scripts on startup.
 */
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
 
 IF OBJECT_ID(N'dbo.Operators', N'U') IS NULL
 BEGIN

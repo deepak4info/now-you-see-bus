@@ -40,7 +40,7 @@ npm run dev
 
 Open `http://localhost:4317`.
 
-You can also run `database/001_schema.sql` and `database/002_seed.sql` yourself in SSMS. Starting the API still fills in users, drivers, schedules, route geometry, and fares.
+To create the database yourself, open `database/WhereIsMyBus.sql` in SSMS or Azure Data Studio and execute it. That one script creates `WhereIsMyBus`, the tables, and the sample corridor, including the four demo accounts. `001_schema.sql` and `002_seed.sql` are the same script split in two. Starting the API runs them as well, and skips any rows that are already there.
 
 ## Sign in
 
