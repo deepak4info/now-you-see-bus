@@ -122,7 +122,35 @@ export function DriverPage() {
     }
   }
 
-  const pin = live?.latitude != null && live.longitude != null
+  async function confirmArrival(stopId: number) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await api(`/api/driver/trips/${selected.id}/stops/${stopId}/arrival`, { method: "POST" });
+      setMessage("Station arrival recorded. Upcoming ETAs updated.");
+      await seed.reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not record arrival");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDeparture(stopId: number) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await api(`/api/driver/trips/${selected.id}/stops/${stopId}/departure`, { method: "POST" });
+      setMessage("Station departure recorded. Upcoming ETAs updated.");
+      await seed.reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not record departure");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pin = live?.recordedAt != null && live.latitude != null && live.longitude != null
     ? { latitude: live.latitude, longitude: live.longitude, heading: live.heading, label: live.fleetNumber }
     : null;
 
@@ -180,6 +208,45 @@ export function DriverPage() {
               {selected && selected.status === "Completed" && (
                 <Button className="mt-5" size="lg" disabled={busy} onClick={() => void replay()}>Run this trip again</Button>
               )}
+              {selected?.status === "Running" && live?.stops && (
+                <div className="mt-5 border-t border-white/20 pt-4">
+                  <p className="text-xs uppercase tracking-wider text-gold font-semibold mb-2">Station Confirmation (Approach B)</p>
+                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                    {live.stops.map((stop) => (
+                      <div key={stop.stopId} className="flex items-center justify-between rounded-xl bg-white/10 p-2.5 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-white truncate">{stop.name}</p>
+                          <p className="text-[11px] opacity-70">
+                            {stop.displayStatus || stop.status} · {formatClock(stop.estimatedArrival || stop.scheduledTime)}
+                          </p>
+                        </div>
+                        <div className="flex gap-1.5 shrink-0 ml-2">
+                          {stop.status !== "Passed" && stop.displayStatus !== "Departed" && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void confirmArrival(stop.stopId)}
+                              className="rounded-md bg-amber-500 hover:bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-black transition-colors"
+                            >
+                              Reached
+                            </button>
+                          )}
+                          {stop.status !== "Passed" && stop.displayStatus !== "Departed" && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void confirmDeparture(stop.stopId)}
+                              className="rounded-md bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1 text-[11px] font-semibold text-white transition-colors"
+                            >
+                              Departed
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {message && <p className="mt-3 text-sm text-gold">{message}</p>}
               {live?.status === "Running" && (
                 <p className="mt-3 text-sm">Now {live.currentStop ?? "between stops"} · next {live.nextStop ?? "destination"}.</p>
@@ -188,7 +255,7 @@ export function DriverPage() {
           )}
         </section>
         <section className="min-h-[420px] overflow-hidden rounded-2xl">
-          {live && <MapView path={live.path} stops={live.stops} bus={pin} className="h-full min-h-[420px] w-full" />}
+          {live && <MapView path={live.path} stops={live.stops} bus={pin} focusBus={live.status === "Running"} className="h-full min-h-[420px] w-full" />}
         </section>
       </div>
     </div>

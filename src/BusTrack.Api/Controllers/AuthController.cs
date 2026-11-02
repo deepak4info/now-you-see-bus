@@ -3,6 +3,7 @@ using BusTrack.Api.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace BusTrack.Api.Controllers;
@@ -22,10 +23,11 @@ public class AuthController : ControllerBase
         _jwt = jwt;
     }
 
+    [EnableRateLimiting("auth-limit")]
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request, CancellationToken ct)
     {
-        var login = request.Login.Trim();
+        var login = request.Login?.Trim() ?? string.Empty;
         if (login.Length == 0 || string.IsNullOrWhiteSpace(request.Password))
             return BadRequest(new { message = "Enter your email or driver ID, and a password." });
 
@@ -38,14 +40,15 @@ public class AuthController : ControllerBase
         return Ok(Token(user));
     }
 
+    [EnableRateLimiting("auth-limit")]
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request, CancellationToken ct)
     {
-        var name = request.FullName.Trim();
-        var email = request.Email.Trim();
+        var name = request.FullName?.Trim() ?? string.Empty;
+        var email = request.Email?.Trim() ?? string.Empty;
         if (name.Length < 2) return BadRequest(new { message = "Enter your name." });
         if (!email.Contains('@') || email.Length > 256) return BadRequest(new { message = "Enter a valid email." });
-        if (request.Password.Length < 8) return BadRequest(new { message = "Use a password of at least 8 characters." });
+        if (string.IsNullOrEmpty(request.Password) || request.Password.Length < 8) return BadRequest(new { message = "Use a password of at least 8 characters." });
         if (await _db.Users.AnyAsync(u => u.Email == email, ct))
             return BadRequest(new { message = "An account with that email already exists." });
 
@@ -70,7 +73,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Me(CancellationToken ct)
     {
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == User.Id(), ct);
-        if (user is null) return Unauthorized(new { message = "Sign in again." });
+        if (user is null || !user.IsActive) return Unauthorized(new { message = "Sign in again." });
         return Ok(new { user.FullName, user.Email, user.Role, user.DriverCode, user.Phone });
     }
 

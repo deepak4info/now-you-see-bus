@@ -83,16 +83,48 @@ public class TrackingService
             .ToList();
     }
 
-    public async Task<TrackSnapshotDto?> GetByFleetAsync(string fleet, string? from, string? to, CancellationToken ct = default)
+    public async Task<TrackSnapshotDto?> GetByFleetAsync(
+        string fleet, string? from, string? to, int? requestedRouteId = null, CancellationToken ct = default)
     {
         var normalized = NormalizeFleet(fleet);
         var bus = await _db.Buses.AsNoTracking().FirstOrDefaultAsync(
             b => b.IsActive && (b.FleetNumber == normalized || b.RegistrationNumber == normalized), ct);
         if (bus is null) return null;
 
+        List<int>? legRouteIds = null;
+        if (!string.IsNullOrWhiteSpace(from) && !string.IsNullOrWhiteSpace(to))
+        {
+            var fromStop = await FindStop(from, ct);
+            var toStop = await FindStop(to, ct);
+            if (fromStop is null || toStop is null || fromStop.Id == toStop.Id) return null;
+
+            var legStops = await _db.RouteStops.AsNoTracking()
+                .Where(rs => rs.StopId == fromStop.Id || rs.StopId == toStop.Id)
+                .ToListAsync(ct);
+            legRouteIds = legStops
+                .GroupBy(rs => rs.RouteId)
+                .Where(group =>
+                {
+                    var origin = group.FirstOrDefault(rs => rs.StopId == fromStop.Id);
+                    var destination = group.FirstOrDefault(rs => rs.StopId == toStop.Id);
+                    return origin is not null && destination is not null
+                        && origin.SequenceNo < destination.SequenceNo;
+                })
+                .Select(group => group.Key)
+                .ToList();
+            if (legRouteIds.Count == 0) return null;
+        }
+
+        if (requestedRouteId is int routeId)
+        {
+            if (legRouteIds is not null && !legRouteIds.Contains(routeId)) return null;
+            legRouteIds = [routeId];
+        }
+
         var today = IndiaClock.Today();
         var trips = await QueryTrips().Where(t => t.BusId == bus.Id && t.ServiceDate == today).ToListAsync(ct);
-        var trip = trips
+        var matchingTrips = legRouteIds is null ? trips : trips.Where(t => legRouteIds.Contains(t.RouteId));
+        var trip = matchingTrips
             .OrderByDescending(t => t.Status == "Running")
             .ThenByDescending(t => t.Status == "Scheduled")
             .ThenByDescending(t => t.Id)
@@ -103,7 +135,8 @@ public class TrackingService
             .Include(s => s.Bus!).ThenInclude(b => b.Operator)
             .Include(s => s.Route)
             .Include(s => s.Driver!).ThenInclude(d => d.User)
-            .Where(s => s.IsActive && s.BusId == bus.Id)
+            .Where(s => s.IsActive && s.BusId == bus.Id
+                && (legRouteIds == null || legRouteIds.Contains(s.RouteId)))
             .OrderBy(s => s.DepartureTime)
             .FirstOrDefaultAsync(ct);
         return schedule is null ? null : await BuildScheduleSnapshot(schedule, from, to, today, ct);
@@ -122,6 +155,89 @@ public class TrackingService
         var list = new List<TrackSnapshotDto>();
         foreach (var trip in trips)
             list.Add(await BuildSnapshot(trip, null, null, ct));
+        return list;
+    }
+
+    public async Task<TrackSnapshotDto?> GetRouteSnapshotAsync(int routeId, CancellationToken ct = default)
+    {
+        var today = IndiaClock.Today();
+
+        // 1. Live running trip on this route today
+        var runningTrip = await QueryTrips()
+            .Where(t => t.RouteId == routeId && t.ServiceDate == today && t.Status == "Running")
+            .OrderByDescending(t => t.StartedAt)
+            .FirstOrDefaultAsync(ct);
+        if (runningTrip is not null)
+            return await BuildSnapshot(runningTrip, null, null, ct);
+
+        // 2. Scheduled trip on this route today
+        var scheduledTrip = await QueryTrips()
+            .Where(t => t.RouteId == routeId && t.ServiceDate == today)
+            .OrderBy(t => t.Schedule.DepartureTime)
+            .FirstOrDefaultAsync(ct);
+        if (scheduledTrip is not null)
+            return await BuildSnapshot(scheduledTrip, null, null, ct);
+
+        // 3. Fallback to active schedule for this route
+        var schedule = await _db.Schedules
+            .Include(s => s.Bus!).ThenInclude(b => b.Operator)
+            .Include(s => s.Route)
+            .Include(s => s.Driver!).ThenInclude(d => d.User)
+            .Where(s => s.IsActive && s.RouteId == routeId && s.BusId != null)
+            .OrderBy(s => s.DepartureTime)
+            .FirstOrDefaultAsync(ct);
+        if (schedule is not null)
+            return await BuildScheduleSnapshot(schedule, null, null, today, ct);
+
+        // 4. Fallback to route definition itself
+        var route = await _db.Routes.AsNoTracking().FirstOrDefaultAsync(r => r.Id == routeId, ct);
+        if (route is null) return null;
+        var routeStops = await LoadRouteStops(routeId, ct);
+        var path = await LoadPath(routeId, ct);
+        var firstStop = routeStops.FirstOrDefault()?.Stop.Name ?? "";
+        var lastStop = routeStops.LastOrDefault()?.Stop.Name ?? "";
+
+        return new TrackSnapshotDto
+        {
+            RouteId = route.Id,
+            RouteCode = route.Code,
+            RouteName = route.Name,
+            FleetNumber = "SCHED",
+            RegistrationNumber = "Scheduled Service",
+            BusType = "Haryana Roadways",
+            Capacity = 52,
+            OperatorName = "Haryana Roadways",
+            Status = "Scheduled",
+            DepartureTime = "08:00",
+            ServiceDate = today.ToString("yyyy-MM-dd"),
+            FromStop = firstStop,
+            ToStop = lastStop,
+            Stops = routeStops.Select(s => new StopOnTripDto
+            {
+                StopId = s.StopId,
+                Name = s.Stop.Name,
+                Code = s.Stop.Code,
+                Sequence = s.SequenceNo,
+                Latitude = (double)s.Stop.Latitude,
+                Longitude = (double)s.Stop.Longitude,
+                DistanceKm = (double)s.DistanceFromOriginKm,
+                ScheduledTime = "08:00",
+                Status = "Scheduled",
+                DisplayStatus = "Scheduled"
+            }).ToList(),
+            Path = path.Select(p => new PointDto(p.Lat, p.Lng)).ToList()
+        };
+    }
+
+    public async Task<List<TrackSnapshotDto>> GetAllActiveRouteSnapshotsAsync(CancellationToken ct = default)
+    {
+        var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
+        var list = new List<TrackSnapshotDto>();
+        foreach (var r in routes)
+        {
+            var snap = await GetRouteSnapshotAsync(r.Id, ct);
+            if (snap is not null) list.Add(snap);
+        }
         return list;
     }
 
@@ -213,7 +329,8 @@ public class TrackingService
 
         var routeStops = await LoadRouteStops(trip.RouteId, ct);
         var path = await LoadPath(trip.RouteId, ct);
-        var along = path.Count == 0 ? 0 : Geo.Project(new LatLng(lat, lng), path).DistanceAlongKm;
+        var pathDistance = path.Count == 0 ? 0 : Geo.Project(new LatLng(lat, lng), path).DistanceAlongKm;
+        var along = RouteDistanceAtPathDistance(routeStops, path, pathDistance);
         var displaySpeed = keepSimulation ? (double?)null : speed;
 
         var etas = await EnsureStopEtas(trip, routeStops, ct);
@@ -225,7 +342,7 @@ public class TrackingService
                 currentIndex = i;
         }
 
-        ApplyStopProgress(etas, routeStops, along, currentIndex, displaySpeed);
+        ApplyStopProgress(trip, etas, routeStops, along, currentIndex, displaySpeed, lat, lng);
 
         var last = routeStops.Count == 0 ? null : routeStops[^1];
         var arrived = last is not null
@@ -241,7 +358,7 @@ public class TrackingService
             foreach (var entry in _db.ChangeTracker.Entries<TripStopEta>().Where(e => e.State == EntityState.Added).ToList())
                 entry.State = EntityState.Detached;
             etas = await _db.TripStopEtas.Where(e => e.TripId == trip.Id).ToListAsync(ct);
-            ApplyStopProgress(etas, routeStops, along, currentIndex, displaySpeed);
+            ApplyStopProgress(trip, etas, routeStops, along, currentIndex, displaySpeed, lat, lng);
             await _db.SaveChangesAsync(ct);
         }
         if (arrived) await CompleteCore(trip, null, ct);
@@ -255,17 +372,34 @@ public class TrackingService
     {
         var etas = await _db.TripStopEtas.Where(e => e.TripId == trip.Id).ToListAsync(ct);
         var seen = etas.Select(e => e.StopId).ToHashSet();
+        var departureUtc = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime);
+
         foreach (var rs in routeStops)
         {
-            if (!seen.Add(rs.StopId)) continue;
+            var schedTime = rs.SequenceNo == 1
+                ? departureUtc
+                : departureUtc.AddMinutes(Geo.EtaMinutes((double)rs.DistanceFromOriginKm));
+
+            if (!seen.Add(rs.StopId))
+            {
+                var existing = etas.First(e => e.StopId == rs.StopId);
+                existing.ScheduledArrival ??= schedTime;
+                existing.ScheduledDeparture ??= rs.SequenceNo == 1 ? departureUtc : schedTime;
+                continue;
+            }
+
             var row = new TripStopEta
             {
                 TripId = trip.Id,
                 StopId = rs.StopId,
                 SequenceNo = rs.SequenceNo,
                 Status = "Pending",
-                ScheduledArrival = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime)
-                    .AddMinutes(Geo.EtaMinutes((double)rs.DistanceFromOriginKm))
+                ScheduledArrival = schedTime,
+                ScheduledDeparture = rs.SequenceNo == 1 ? departureUtc : schedTime,
+                EstimatedArrival = schedTime,
+                EstimatedDeparture = rs.SequenceNo == 1 ? departureUtc : schedTime,
+                DelayMinutes = 0,
+                LastUpdatedAt = DateTime.UtcNow
             };
             _db.TripStopEtas.Add(row);
             etas.Add(row);
@@ -273,25 +407,94 @@ public class TrackingService
         return etas;
     }
 
-    private static void ApplyStopProgress(List<TripStopEta> etas, List<RouteStop> routeStops, double along, int currentIndex, double? displaySpeed)
+    private static void ApplyStopProgress(Trip trip, List<TripStopEta> etas, List<RouteStop> routeStops, double along, int currentIndex, double? displaySpeed, double? lat = null, double? lng = null)
     {
+        var now = DateTime.UtcNow;
+        var departureUtc = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime);
+
         for (var i = 0; i < routeStops.Count; i++)
         {
             var rs = routeStops[i];
-            var row = etas.First(e => e.StopId == rs.StopId);
-            if (i <= currentIndex)
+            var row = etas.FirstOrDefault(e => e.StopId == rs.StopId);
+            if (row is null) continue;
+
+            row.ScheduledArrival ??= rs.SequenceNo == 1 ? departureUtc : departureUtc.AddMinutes(Geo.EtaMinutes((double)rs.DistanceFromOriginKm));
+            row.ScheduledDeparture ??= rs.SequenceNo == 1 ? departureUtc : row.ScheduledArrival;
+
+            if (i < currentIndex)
             {
-                row.Status = i == currentIndex ? "Current" : "Passed";
+                // Bus has departed this stop
+                row.Status = "Departed";
                 row.EtaMinutes = 0;
-                row.ActualArrival ??= DateTime.UtcNow;
+                row.ActualArrival ??= row.ScheduledArrival;
+                row.ActualDeparture ??= now;
+                if (row.ScheduledDeparture.HasValue && row.ActualDeparture.HasValue)
+                {
+                    row.DelayMinutes = (int)Math.Round((row.ActualDeparture.Value - row.ScheduledDeparture.Value).TotalMinutes);
+                }
+            }
+            else if (i == currentIndex)
+            {
+                // Bus is currently at this stop or just reached it
+                var isNearStop = lat.HasValue && lng.HasValue
+                    && Geo.HaversineKm(lat.Value, lng.Value, (double)rs.Stop.Latitude, (double)rs.Stop.Longitude) < 0.25;
+
+                row.ActualArrival ??= now;
+                row.EtaMinutes = 0;
+                row.Status = isNearStop ? "Arrived" : "Current";
+                if (row.ScheduledArrival.HasValue && row.ActualArrival.HasValue)
+                {
+                    row.DelayMinutes = (int)Math.Round((row.ActualArrival.Value - row.ScheduledArrival.Value).TotalMinutes);
+                }
             }
             else
             {
+                // Upcoming stop: dynamically recalculate ETA based on current location and travel time
                 var remain = Math.Max(0, (double)rs.DistanceFromOriginKm - along);
-                row.EtaMinutes = Geo.EtaMinutes(remain, displaySpeed);
-                row.EstimatedArrival = DateTime.UtcNow.AddMinutes(row.EtaMinutes.Value);
-                row.Status = i == currentIndex + 1 ? "Next" : "Pending";
+                var travelMins = Geo.EtaMinutes(remain, displaySpeed);
+                row.EtaMinutes = travelMins;
+                row.EstimatedArrival = now.AddMinutes(travelMins);
+                row.EstimatedDeparture = row.EstimatedArrival;
+                if (row.ScheduledArrival.HasValue)
+                {
+                    var delay = (int)Math.Round((row.EstimatedArrival.Value - row.ScheduledArrival.Value).TotalMinutes);
+                    row.DelayMinutes = delay;
+                    row.Status = delay > 3 ? "Delayed" : (delay < -3 ? "Early" : "OnTime");
+                }
+                else
+                {
+                    row.DelayMinutes = 0;
+                    row.Status = i == currentIndex + 1 ? "Next" : "Pending";
+                }
             }
+            row.LastUpdatedAt = now;
+        }
+    }
+
+    private static void ComputeScheduledStopEtas(Trip trip, List<TripStopEta> etas, List<RouteStop> routeStops)
+    {
+        var now = DateTime.UtcNow;
+        var departureUtc = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime);
+        var departs = (int)Math.Round((departureUtc - now).TotalMinutes);
+        var delay = departs < -2 ? -departs : 0;
+
+        for (var i = 0; i < routeStops.Count; i++)
+        {
+            var rs = routeStops[i];
+            var row = etas.FirstOrDefault(e => e.StopId == rs.StopId);
+            if (row is null) continue;
+
+            var travelMins = Geo.EtaMinutes((double)rs.DistanceFromOriginKm);
+            var schedTime = rs.SequenceNo == 1 ? departureUtc : departureUtc.AddMinutes(travelMins);
+
+            row.ScheduledArrival = schedTime;
+            row.ScheduledDeparture = rs.SequenceNo == 1 ? departureUtc : schedTime;
+            row.EstimatedArrival = schedTime.AddMinutes(delay);
+            row.EstimatedDeparture = row.EstimatedArrival;
+            row.DelayMinutes = delay;
+            row.Status = delay > 3 ? "Delayed" : "Scheduled";
+            row.EtaMinutes = delay > 0 ? travelMins + delay : travelMins;
+            row.LastUpdatedAt = now;
         }
     }
 
@@ -312,7 +515,8 @@ public class TrackingService
             if (!trip.Simulation || trip.Status != "Running") continue;
             var path = await LoadPath(trip.RouteId, ct);
             if (path.Count < 2) continue;
-            var total = Geo.Length(path);
+            var routeStops = await LoadRouteStops(trip.RouteId, ct);
+            var total = routeStops.Count > 0 ? (double)routeStops[^1].DistanceFromOriginKm : Geo.Length(path);
             var nextKm = (double)trip.OdometerKm + 0.22;
             if (nextKm >= total - 0.05)
             {
@@ -321,8 +525,8 @@ public class TrackingService
                 await IngestAsync(trip.Id, end.Lat, end.Lng, Geo.RoadSpeedKmph, null, true, ct);
                 continue;
             }
-            var prev = Geo.PointAt(path, (double)trip.OdometerKm);
-            var pos = Geo.PointAt(path, nextKm);
+            var prev = Geo.PointAt(path, PathDistanceAtRouteDistance(routeStops, path, (double)trip.OdometerKm));
+            var pos = Geo.PointAt(path, PathDistanceAtRouteDistance(routeStops, path, nextKm));
             trip.OdometerKm = decimal.Round((decimal)nextKm, 3);
             await IngestAsync(trip.Id, pos.Lat, pos.Lng, Geo.RoadSpeedKmph, Geo.Bearing(prev, pos), true, ct);
         }
@@ -352,11 +556,20 @@ public class TrackingService
 
     public async Task Audit(Guid? userId, string action, string entity, string? entityId, string? detail, CancellationToken ct = default)
     {
+        if (entityId != null && entityId.Length > 40)
+            entityId = entityId[..40];
+        if (detail != null && detail.Length > 500)
+            detail = detail[..500];
+        if (action != null && action.Length > 80)
+            action = action[..80];
+        if (entity != null && entity.Length > 80)
+            entity = entity[..80];
+
         _db.AuditLogs.Add(new AuditLog
         {
             UserId = userId,
-            Action = action,
-            Entity = entity,
+            Action = action ?? "",
+            Entity = entity ?? "",
             EntityId = entityId,
             Detail = detail,
             CreatedAt = DateTime.UtcNow
@@ -387,11 +600,30 @@ public class TrackingService
             .FirstOrDefaultAsync(ct);
         var live = await OperationsAreLive(ct);
         double? along = ping is null || path.Count == 0
-            ? null
-            : Geo.Project(new LatLng((double)ping.Latitude, (double)ping.Longitude), path).DistanceAlongKm;
+            ? (trip.Status == "Running" ? (double)trip.OdometerKm : null)
+            : RouteDistanceAtPathDistance(
+                routeStops,
+                path,
+                Geo.Project(new LatLng((double)ping.Latitude, (double)ping.Longitude), path).DistanceAlongKm);
         double? speed = ping?.SpeedKmph is decimal s ? (double)s : null;
 
-        var (stops, current, next, etaNext, etaDest) = DescribeStops(routeStops, trip.Schedule.DepartureTime, trip.Status, along, speed);
+        var etas = await EnsureStopEtas(trip, routeStops, ct);
+        if (trip.Status == "Running" && along.HasValue)
+        {
+            var currentIndex = -1;
+            for (var i = 0; i < routeStops.Count; i++)
+            {
+                if (along.Value + 0.15 >= (double)routeStops[i].DistanceFromOriginKm)
+                    currentIndex = i;
+            }
+            ApplyStopProgress(trip, etas, routeStops, along.Value, currentIndex, speed, ping is null ? null : (double?)ping.Latitude, ping is null ? null : (double?)ping.Longitude);
+        }
+        else if (trip.Status == "Scheduled")
+        {
+            ComputeScheduledStopEtas(trip, etas, routeStops);
+        }
+
+        var (stops, current, next, etaNext, etaDest, tripDelay, delayStatus) = DescribeStops(trip, routeStops, etas, trip.Schedule.DepartureTime, trip.Status, along, speed);
         var (fare, etaYou, boardingPassed, etaAlight) = await PassengerLeg(trip.RouteId, routeStops, from, to, along, speed, ct);
         if (etaAlight is not null) etaDest = etaAlight;
 
@@ -405,21 +637,19 @@ public class TrackingService
         }
 
         int? departs = null;
-        int? delay = null;
         var departureUtc = IndiaClock.ToUtc(trip.ServiceDate, trip.Schedule.DepartureTime);
         if (trip.Status == "Scheduled")
         {
             departs = (int)Math.Round((departureUtc - DateTime.UtcNow).TotalMinutes);
-            delay = departs < -2 ? -departs : 0;
         }
-        else if (next is not null && etaNext is not null)
-        {
-            var target = routeStops.First(r => r.Stop.Name == next);
-            var scheduled = departureUtc.AddMinutes(Geo.EtaMinutes((double)target.DistanceFromOriginKm));
-            delay = (int)Math.Round((DateTime.UtcNow.AddMinutes(etaNext.Value) - scheduled).TotalMinutes);
-        }
-        var outsideSlot = delay is > 180;
-        if (outsideSlot) delay = null;
+
+        var originEta = etas.FirstOrDefault(e => e.SequenceNo == 1);
+        var actualDeparture = trip.StartedAt.HasValue
+            ? IndiaClock.FormatClock12(trip.StartedAt.Value)
+            : (originEta?.ActualDeparture is { } ad ? IndiaClock.FormatClock12(ad) : null);
+        var estimatedDeparture = originEta?.EstimatedDeparture is { } ed
+            ? IndiaClock.FormatClock12(ed)
+            : IndiaClock.FormatClock12(trip.Schedule.DepartureTime);
 
         return new TrackSnapshotDto
         {
@@ -444,11 +674,15 @@ public class TrackingService
             CurrentStop = current,
             NextStop = next,
             EtaMinutes = etaNext,
-            DelayMinutes = delay,
-            OutsideSlot = outsideSlot,
+            DelayMinutes = tripDelay,
+            OutsideSlot = tripDelay > 180,
             Simulation = trip.Simulation,
             OperationsLive = live,
             DepartureTime = IndiaClock.Clock(trip.Schedule.DepartureTime),
+            ActualDepartureTime = actualDeparture,
+            EstimatedDepartureTime = estimatedDeparture,
+            DelayStatus = delayStatus,
+            LastEtaUpdate = etas.Max(e => e.LastUpdatedAt) ?? (ping is null ? null : IndiaClock.AsUtc(ping.RecordedAt)),
             ServiceDate = trip.ServiceDate.ToString("yyyy-MM-dd"),
             Fare = fare,
             FromStop = from,
@@ -466,11 +700,32 @@ public class TrackingService
     {
         var routeStops = await LoadRouteStops(schedule.RouteId, ct);
         var path = await LoadPath(schedule.RouteId, ct);
-        var (stops, current, next, _, _) = DescribeStops(routeStops, schedule.DepartureTime, "Scheduled", null, null);
-        var (fare, _, _, _) = await PassengerLeg(schedule.RouteId, routeStops, from, to, null, null, ct);
-        var live = await OperationsAreLive(ct);
         var departureUtc = IndiaClock.ToUtc(date, schedule.DepartureTime);
         var departs = (int)Math.Round((departureUtc - DateTime.UtcNow).TotalMinutes);
+        var delay = (date == IndiaClock.Today() && departs < -2) ? -departs : 0;
+
+        var etas = routeStops.Select(rs =>
+        {
+            var travelMins = Geo.EtaMinutes((double)rs.DistanceFromOriginKm);
+            var schedTime = rs.SequenceNo == 1 ? departureUtc : departureUtc.AddMinutes(travelMins);
+            return new TripStopEta
+            {
+                StopId = rs.StopId,
+                SequenceNo = rs.SequenceNo,
+                ScheduledArrival = schedTime,
+                ScheduledDeparture = rs.SequenceNo == 1 ? departureUtc : schedTime,
+                EstimatedArrival = schedTime.AddMinutes(delay),
+                EstimatedDeparture = rs.SequenceNo == 1 ? departureUtc.AddMinutes(delay) : schedTime.AddMinutes(delay),
+                DelayMinutes = delay,
+                Status = delay > 3 ? "Delayed" : "Scheduled",
+                EtaMinutes = delay > 0 ? travelMins + delay : travelMins,
+                LastUpdatedAt = DateTime.UtcNow
+            };
+        }).ToList();
+
+        var (stops, current, next, _, _, tripDelay, delayStatus) = DescribeStops(null, routeStops, etas, schedule.DepartureTime, "Scheduled", null, null, date);
+        var (fare, _, _, _) = await PassengerLeg(schedule.RouteId, routeStops, from, to, null, null, ct);
+        var live = await OperationsAreLive(ct);
         var anchor = routeStops.Count > 0 ? routeStops[0] : null;
 
         return new TrackSnapshotDto
@@ -491,6 +746,10 @@ public class TrackingService
             Longitude = anchor is null ? null : (double)anchor.Stop.Longitude,
             OperationsLive = live,
             DepartureTime = IndiaClock.Clock(schedule.DepartureTime),
+            ActualDepartureTime = null,
+            EstimatedDepartureTime = delay > 0 ? IndiaClock.FormatClock12(departureUtc.AddMinutes(delay)) : IndiaClock.FormatClock12(schedule.DepartureTime),
+            DelayStatus = delayStatus,
+            LastEtaUpdate = DateTime.UtcNow,
             ServiceDate = date.ToString("yyyy-MM-dd"),
             Fare = fare,
             FromStop = from,
@@ -498,81 +757,366 @@ public class TrackingService
             CurrentStop = current,
             NextStop = next,
             DepartsInMinutes = departs,
-            DelayMinutes = departs < -180 ? null : departs < -2 ? -departs : 0,
+            DelayMinutes = departs < -180 ? null : (tripDelay ?? (delay > 0 ? delay : 0)),
             OutsideSlot = departs < -180,
             Stops = stops,
             Path = path.Select(p => new PointDto(p.Lat, p.Lng)).ToList()
         };
     }
 
-    private static (List<StopOnTripDto> Stops, string? Current, string? Next, int? EtaNext, int? EtaDest) DescribeStops(
-        List<RouteStop> routeStops, TimeOnly departure, string tripStatus, double? along, double? speed)
+    private static (List<StopOnTripDto> Stops, string? Current, string? Next, int? EtaNext, int? EtaDest, int? overallDelay, string delayStatus) DescribeStops(
+        Trip? trip,
+        List<RouteStop> routeStops,
+        List<TripStopEta> etas,
+        TimeOnly departure,
+        string tripStatus,
+        double? along,
+        double? speed,
+        DateOnly? serviceDate = null)
     {
-        var stops = routeStops.Select(rs => new StopOnTripDto
-        {
-            StopId = rs.StopId,
-            Name = rs.Stop.Name,
-            Code = rs.Stop.Code,
-            Sequence = rs.SequenceNo,
-            Latitude = (double)rs.Stop.Latitude,
-            Longitude = (double)rs.Stop.Longitude,
-            DistanceKm = (double)rs.DistanceFromOriginKm,
-            ScheduledTime = IndiaClock.ClockFromDeparture(departure, (double)rs.DistanceFromOriginKm)
-        }).ToList();
-
         string? current = null;
         string? next = null;
         int? etaNext = null;
         int? etaDest = null;
 
+        var currentIndex = -1;
         if (along is not null)
         {
-            var currentIndex = -1;
             for (var i = 0; i < routeStops.Count; i++)
             {
                 if (along.Value + 0.15 >= (double)routeStops[i].DistanceFromOriginKm)
                     currentIndex = i;
             }
-            for (var i = 0; i < stops.Count; i++)
+        }
+
+        var stops = new List<StopOnTripDto>();
+        for (var i = 0; i < routeStops.Count; i++)
+        {
+            var rs = routeStops[i];
+            var row = etas.FirstOrDefault(e => e.StopId == rs.StopId);
+            var dist = (double)rs.DistanceFromOriginKm;
+            var schedTime = IndiaClock.ClockFromDeparture(departure, dist);
+
+            string status;
+            string displayStatus;
+            int? etaMins = null;
+
+            if (tripStatus == "Completed")
+            {
+                status = i == routeStops.Count - 1 ? "Current" : "Passed";
+                displayStatus = i == routeStops.Count - 1 ? "Arrived" : "Departed";
+                etaMins = 0;
+            }
+            else if (along is not null)
             {
                 if (i < currentIndex)
-                    stops[i] = stops[i] with { Status = "Passed", EtaMinutes = 0 };
+                {
+                    status = "Passed";
+                    displayStatus = "Departed";
+                    etaMins = 0;
+                }
                 else if (i == currentIndex)
                 {
-                    stops[i] = stops[i] with { Status = "Current", EtaMinutes = 0 };
-                    current = stops[i].Name;
+                    status = "Current";
+                    displayStatus = row?.Status == "Arrived" ? "Arrived" : "Current";
+                    etaMins = 0;
+                    current = rs.Stop.Name;
                 }
                 else
                 {
-                    var remain = Math.Max(0, (double)routeStops[i].DistanceFromOriginKm - along.Value);
-                    var mins = Geo.EtaMinutes(remain, speed);
-                    var status = next is null ? "Next" : "Pending";
+                    var remain = Math.Max(0, (double)rs.DistanceFromOriginKm - along.Value);
+                    etaMins = Geo.EtaMinutes(remain, speed);
                     if (next is null)
                     {
-                        next = stops[i].Name;
-                        etaNext = mins;
+                        next = rs.Stop.Name;
+                        etaNext = etaMins;
+                        status = "Next";
                     }
-                    if (i == stops.Count - 1) etaDest = mins;
-                    stops[i] = stops[i] with { Status = status, EtaMinutes = mins };
+                    else
+                    {
+                        status = "Pending";
+                    }
+                    if (i == routeStops.Count - 1) etaDest = etaMins;
+
+                    var delay = row?.DelayMinutes ?? 0;
+                    displayStatus = delay > 3 ? "Delayed" : (delay < -3 ? "Early" : "On time");
                 }
             }
-            if (currentIndex == stops.Count - 1) etaDest = 0;
-            return (stops, current, next, etaNext, etaDest);
+            else if (tripStatus == "Scheduled")
+            {
+                status = i == 0 ? "Next" : "Pending";
+                if (i == 0) next = rs.Stop.Name;
+                var delay = row?.DelayMinutes ?? 0;
+                displayStatus = delay > 3 ? "Delayed" : "Scheduled";
+                etaMins = row?.EtaMinutes;
+            }
+            else
+            {
+                status = "Pending";
+                displayStatus = "Scheduled";
+            }
+
+            stops.Add(new StopOnTripDto
+            {
+                StopId = rs.StopId,
+                Name = rs.Stop.Name,
+                Code = rs.Stop.Code,
+                Sequence = rs.SequenceNo,
+                Latitude = (double)rs.Stop.Latitude,
+                Longitude = (double)rs.Stop.Longitude,
+                DistanceKm = dist,
+                ScheduledTime = schedTime,
+                Status = status,
+                EtaMinutes = etaMins,
+                ScheduledArrival = IndiaClock.FormatClock12(row?.ScheduledArrival),
+                EstimatedArrival = IndiaClock.FormatClock12(row?.EstimatedArrival),
+                ActualArrival = IndiaClock.FormatClock12(row?.ActualArrival),
+                ScheduledDeparture = IndiaClock.FormatClock12(row?.ScheduledDeparture),
+                EstimatedDeparture = IndiaClock.FormatClock12(row?.EstimatedDeparture),
+                ActualDeparture = IndiaClock.FormatClock12(row?.ActualDeparture),
+                DelayMinutes = row?.DelayMinutes,
+                DisplayStatus = displayStatus
+            });
         }
 
+        if (along is not null && currentIndex == stops.Count - 1) etaDest = 0;
         if (tripStatus == "Completed" && stops.Count > 0)
         {
-            for (var i = 0; i < stops.Count; i++)
-                stops[i] = stops[i] with { Status = i == stops.Count - 1 ? "Current" : "Passed", EtaMinutes = 0 };
-            return (stops, stops[^1].Name, null, 0, 0);
+            current = stops[^1].Name;
+            next = null;
+            etaNext = 0;
+            etaDest = 0;
         }
 
-        if (stops.Count > 0)
+        int? overallDelay = null;
+        string delayStatus = "On time";
+
+        if (tripStatus == "Completed")
         {
-            stops[0] = stops[0] with { Status = "Next" };
-            next = stops[0].Name;
+            delayStatus = "Completed";
+            overallDelay = 0;
         }
-        return (stops, current, next, etaNext, etaDest);
+        else if (tripStatus == "Scheduled")
+        {
+            var depUtc = IndiaClock.ToUtc(trip?.ServiceDate ?? serviceDate ?? IndiaClock.Today(), departure);
+            var departs = (int)Math.Round((depUtc - DateTime.UtcNow).TotalMinutes);
+            if (departs < -2)
+            {
+                overallDelay = -departs;
+                delayStatus = $"{overallDelay} min delayed";
+            }
+            else
+            {
+                overallDelay = 0;
+                delayStatus = "Scheduled";
+            }
+        }
+        else // Running
+        {
+            var relevant = etas.FirstOrDefault(e => e.Status == "Current" || e.Status == "Arrived")
+                        ?? etas.FirstOrDefault(e => e.Status == "Next" || e.Status == "Delayed" || e.Status == "OnTime")
+                        ?? etas.LastOrDefault(e => e.Status == "Departed" || e.Status == "Passed");
+            overallDelay = relevant?.DelayMinutes ?? 0;
+            if (overallDelay > 3) delayStatus = $"{overallDelay} min delayed";
+            else if (overallDelay < -3) delayStatus = $"{Math.Abs(overallDelay.Value)} min early";
+            else delayStatus = "On time";
+        }
+
+        return (stops, current, next, etaNext, etaDest, overallDelay, delayStatus);
+    }
+
+    public async Task<TripEtaResponseDto?> GetTripEtasAsync(int tripId, CancellationToken ct = default)
+    {
+        var trip = await LoadTrip(tripId, ct);
+        if (trip is null) return null;
+        var snap = await BuildSnapshot(trip, null, null, ct);
+        return new TripEtaResponseDto
+        {
+            TripId = trip.Id,
+            FleetNumber = trip.Bus.FleetNumber,
+            RouteName = trip.Route.Name,
+            Status = trip.Status,
+            DelayStatus = snap.DelayStatus ?? (snap.DelayMinutes > 3 ? $"{snap.DelayMinutes} min delayed" : "On time"),
+            DelayMinutes = snap.DelayMinutes,
+            ScheduledDeparture = snap.DepartureTime,
+            ActualDeparture = snap.ActualDepartureTime,
+            EstimatedDeparture = snap.EstimatedDepartureTime,
+            LastUpdatedAt = snap.LastEtaUpdate ?? DateTime.UtcNow,
+            Stops = snap.Stops
+        };
+    }
+
+    public async Task<TrackSnapshotDto> MarkStopArrivalAsync(int tripId, int stopId, DateTime? arrivalTime, CancellationToken ct = default)
+    {
+        var gate = TripGates.GetOrAdd(tripId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var trip = await LoadTrip(tripId, ct);
+            var routeStops = await LoadRouteStops(trip.RouteId, ct);
+            var etas = await EnsureStopEtas(trip, routeStops, ct);
+
+            var stopIndex = routeStops.FindIndex(rs => rs.StopId == stopId);
+            if (stopIndex >= 0)
+            {
+                var now = arrivalTime ?? DateTime.UtcNow;
+                var targetEta = etas.FirstOrDefault(e => e.StopId == stopId);
+                if (targetEta is not null)
+                {
+                    targetEta.ActualArrival = now;
+                    targetEta.Status = "Arrived";
+                    if (targetEta.ScheduledArrival.HasValue)
+                    {
+                        targetEta.DelayMinutes = (int)Math.Round((now - targetEta.ScheduledArrival.Value).TotalMinutes);
+                    }
+                }
+
+                // Recalculate upcoming stations starting from this stop's location and arrival time
+                var currentAlong = (double)routeStops[stopIndex].DistanceFromOriginKm;
+                for (var j = stopIndex + 1; j < routeStops.Count; j++)
+                {
+                    var upcoming = etas.FirstOrDefault(e => e.StopId == routeStops[j].StopId);
+                    if (upcoming is not null)
+                    {
+                        var remainKm = (double)routeStops[j].DistanceFromOriginKm - currentAlong;
+                        var travelMins = Geo.EtaMinutes(remainKm, Geo.RoadSpeedKmph);
+                        upcoming.EtaMinutes = travelMins;
+                        upcoming.EstimatedArrival = now.AddMinutes(travelMins);
+                        upcoming.EstimatedDeparture = upcoming.EstimatedArrival;
+                        if (upcoming.ScheduledArrival.HasValue)
+                        {
+                            var delay = (int)Math.Round((upcoming.EstimatedArrival.Value - upcoming.ScheduledArrival.Value).TotalMinutes);
+                            upcoming.DelayMinutes = delay;
+                            upcoming.Status = delay > 3 ? "Delayed" : (delay < -3 ? "Early" : "OnTime");
+                        }
+                        upcoming.LastUpdatedAt = DateTime.UtcNow;
+                    }
+                }
+
+                await _db.SaveChangesAsync(ct);
+            }
+
+            var snap = await BuildSnapshot(trip, null, null, ct);
+            await Publish(snap, ct);
+            return snap;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<TrackSnapshotDto> MarkStopDepartureAsync(int tripId, int stopId, DateTime? departureTime, CancellationToken ct = default)
+    {
+        var gate = TripGates.GetOrAdd(tripId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var trip = await LoadTrip(tripId, ct);
+            var routeStops = await LoadRouteStops(trip.RouteId, ct);
+            var etas = await EnsureStopEtas(trip, routeStops, ct);
+
+            var stopIndex = routeStops.FindIndex(rs => rs.StopId == stopId);
+            if (stopIndex >= 0)
+            {
+                var now = departureTime ?? DateTime.UtcNow;
+                var targetEta = etas.FirstOrDefault(e => e.StopId == stopId);
+                if (targetEta is not null)
+                {
+                    targetEta.ActualDeparture = now;
+                    targetEta.Status = "Departed";
+                    targetEta.EtaMinutes = 0;
+                    if (targetEta.ScheduledDeparture.HasValue)
+                    {
+                        targetEta.DelayMinutes = (int)Math.Round((now - targetEta.ScheduledDeparture.Value).TotalMinutes);
+                    }
+                }
+
+                // Recalculate upcoming stations starting from this departure
+                var currentAlong = (double)routeStops[stopIndex].DistanceFromOriginKm;
+                for (var j = stopIndex + 1; j < routeStops.Count; j++)
+                {
+                    var upcoming = etas.FirstOrDefault(e => e.StopId == routeStops[j].StopId);
+                    if (upcoming is not null)
+                    {
+                        var remainKm = (double)routeStops[j].DistanceFromOriginKm - currentAlong;
+                        var travelMins = Geo.EtaMinutes(remainKm, Geo.RoadSpeedKmph);
+                        upcoming.EtaMinutes = travelMins;
+                        upcoming.EstimatedArrival = now.AddMinutes(travelMins);
+                        upcoming.EstimatedDeparture = upcoming.EstimatedArrival;
+                        if (upcoming.ScheduledArrival.HasValue)
+                        {
+                            var delay = (int)Math.Round((upcoming.EstimatedArrival.Value - upcoming.ScheduledArrival.Value).TotalMinutes);
+                            upcoming.DelayMinutes = delay;
+                            upcoming.Status = delay > 3 ? "Delayed" : (delay < -3 ? "Early" : "OnTime");
+                        }
+                        upcoming.LastUpdatedAt = DateTime.UtcNow;
+                    }
+                }
+
+                await _db.SaveChangesAsync(ct);
+            }
+
+            var snap = await BuildSnapshot(trip, null, null, ct);
+            await Publish(snap, ct);
+            return snap;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<TrackSnapshotDto> RecalculateTripEtasAsync(int tripId, CancellationToken ct = default)
+    {
+        var gate = TripGates.GetOrAdd(tripId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var trip = await LoadTrip(tripId, ct);
+            var routeStops = await LoadRouteStops(trip.RouteId, ct);
+            var path = await LoadPath(trip.RouteId, ct);
+            var etas = await EnsureStopEtas(trip, routeStops, ct);
+
+            var ping = await _db.GpsPings.AsNoTracking()
+                .Where(p => p.TripId == trip.Id)
+                .OrderByDescending(p => p.RecordedAt)
+                .ThenByDescending(p => p.Id)
+                .FirstOrDefaultAsync(ct);
+
+            double? along = ping is null || path.Count == 0
+                ? (double)trip.OdometerKm
+                : RouteDistanceAtPathDistance(
+                    routeStops,
+                    path,
+                    Geo.Project(new LatLng((double)ping.Latitude, (double)ping.Longitude), path).DistanceAlongKm);
+
+            if (trip.Status == "Running" && along.HasValue)
+            {
+                var currentIndex = -1;
+                for (var i = 0; i < routeStops.Count; i++)
+                {
+                    if (along.Value + 0.15 >= (double)routeStops[i].DistanceFromOriginKm)
+                        currentIndex = i;
+                }
+                var speed = ping?.SpeedKmph is decimal s ? (double)s : Geo.RoadSpeedKmph;
+                ApplyStopProgress(trip, etas, routeStops, along.Value, currentIndex, speed, ping is null ? null : (double?)ping.Latitude, ping is null ? null : (double?)ping.Longitude);
+            }
+            else if (trip.Status == "Scheduled")
+            {
+                ComputeScheduledStopEtas(trip, etas, routeStops);
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            var snap = await BuildSnapshot(trip, null, null, ct);
+            await Publish(snap, ct);
+            return snap;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task<(decimal? Fare, int? EtaYou, bool BoardingPassed, int? EtaAlight)> PassengerLeg(
@@ -642,7 +1186,7 @@ public class TrackingService
             .OrderBy(rs => rs.SequenceNo)
             .ToListAsync(ct);
 
-    private async Task<List<LatLng>> LoadPath(int routeId, CancellationToken ct)
+    public async Task<List<LatLng>> LoadPath(int routeId, CancellationToken ct = default)
     {
         var points = await _db.RoutePoints.AsNoTracking()
             .Where(p => p.RouteId == routeId)
@@ -653,6 +1197,66 @@ public class TrackingService
         var stops = await LoadRouteStops(routeId, ct);
         return stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList();
     }
+
+    private static double RouteDistanceAtPathDistance(
+        IReadOnlyList<RouteStop> stops,
+        IReadOnlyList<LatLng> path,
+        double pathDistance)
+    {
+        if (stops.Count < 2 || path.Count < 2) return pathDistance;
+
+        var stopPathDistances = StopPathDistances(stops, path);
+        for (var index = 1; index < stops.Count; index++)
+        {
+            var previous = stops[index - 1];
+            var current = stops[index];
+            var segmentStart = stopPathDistances[index - 1];
+            var segmentLength = Math.Max(0, stopPathDistances[index] - segmentStart);
+            var segmentEnd = segmentStart + segmentLength;
+            if (pathDistance <= segmentEnd || index == stops.Count - 1)
+            {
+                var progress = segmentLength < 1e-6
+                    ? 0
+                    : Math.Clamp((pathDistance - segmentStart) / segmentLength, 0, 1);
+                var routeStart = (double)previous.DistanceFromOriginKm;
+                var routeLength = (double)(current.DistanceFromOriginKm - previous.DistanceFromOriginKm);
+                return routeStart + routeLength * progress;
+            }
+        }
+        return (double)stops[^1].DistanceFromOriginKm;
+    }
+
+    private static double PathDistanceAtRouteDistance(
+        IReadOnlyList<RouteStop> stops,
+        IReadOnlyList<LatLng> path,
+        double routeDistance)
+    {
+        if (stops.Count < 2 || path.Count < 2) return routeDistance;
+
+        var stopPathDistances = StopPathDistances(stops, path);
+        for (var index = 1; index < stops.Count; index++)
+        {
+            var previous = stops[index - 1];
+            var current = stops[index];
+            var routeStart = (double)previous.DistanceFromOriginKm;
+            var routeLength = (double)(current.DistanceFromOriginKm - previous.DistanceFromOriginKm);
+            var pathStart = stopPathDistances[index - 1];
+            var pathLength = Math.Max(0, stopPathDistances[index] - pathStart);
+            if (routeDistance <= routeStart + routeLength || index == stops.Count - 1)
+            {
+                var progress = routeLength < 1e-6
+                    ? 0
+                    : Math.Clamp((routeDistance - routeStart) / routeLength, 0, 1);
+                return pathStart + pathLength * progress;
+            }
+        }
+        return stopPathDistances[^1];
+    }
+
+    private static double[] StopPathDistances(IReadOnlyList<RouteStop> stops, IReadOnlyList<LatLng> path) =>
+        stops.Select(stop => Geo.Project(
+            new LatLng((double)stop.Stop.Latitude, (double)stop.Stop.Longitude),
+            path).DistanceAlongKm).ToArray();
 
     public static string NormalizeFleet(string fleet)
     {

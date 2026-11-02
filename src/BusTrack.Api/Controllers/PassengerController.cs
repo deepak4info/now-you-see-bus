@@ -20,11 +20,30 @@ public class PassengerController : ControllerBase
         _tracking = tracking;
     }
 
+    [HttpPost("visitors")]
+    public async Task<IActionResult> RegisterVisitor(VisitorRegistrationRequest request, CancellationToken ct)
+    {
+        if (request.VisitorId == Guid.Empty)
+            return BadRequest(new { message = "A valid anonymous visitor ID is required." });
+
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO dbo.Visitors (Id, FirstSeenAt)
+            SELECT {request.VisitorId}, SYSUTCDATETIME()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM dbo.Visitors WITH (UPDLOCK, HOLDLOCK) WHERE Id = {request.VisitorId}
+            );
+            """, ct);
+
+        var visitorCount = await _db.Visitors.CountAsync(ct);
+        return Ok(new { visitorCount });
+    }
+
     [HttpGet("stops")]
     public async Task<IActionResult> Stops(CancellationToken ct)
     {
         var stops = await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct);
-        return Ok(stops.Select(s => new
+        var uniqueStops = StopNormalizer.DeduplicateStopsList(stops);
+        return Ok(uniqueStops.Select(s => new
         {
             s.Id,
             s.Name,
@@ -55,15 +74,111 @@ public class PassengerController : ControllerBase
     }
 
     [HttpGet("track/{fleet}")]
-    public async Task<IActionResult> Track(string fleet, [FromQuery] string? from, [FromQuery] string? to, CancellationToken ct)
+    public async Task<IActionResult> Track(
+        string fleet,
+        [FromQuery] string? from,
+        [FromQuery] string? to,
+        [FromQuery] int? routeId,
+        CancellationToken ct)
     {
-        var snap = await _tracking.GetByFleetAsync(fleet, from, to, ct);
+        var snap = await _tracking.GetByFleetAsync(fleet, from, to, routeId, ct);
         if (snap is null) return NotFound(new { message = $"No bus matches {fleet}." });
         return Ok(snap);
     }
 
     [HttpGet("live")]
-    public async Task<IActionResult> Live(CancellationToken ct) => Ok(await _tracking.LiveAsync(ct));
+    public async Task<IActionResult> Live([FromQuery] bool includeScheduled = false, CancellationToken ct = default)
+    {
+        var liveList = await _tracking.LiveAsync(ct);
+        if (liveList.Count == 0 && includeScheduled)
+        {
+            var scheduledRoutes = await _tracking.GetAllActiveRouteSnapshotsAsync(ct);
+            return Ok(scheduledRoutes);
+        }
+        return Ok(liveList);
+    }
+
+    [HttpGet("routes")]
+    public async Task<IActionResult> Routes(CancellationToken ct)
+    {
+        var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
+        var routeIds = routes.Select(r => r.Id).ToList();
+        var routeStops = await _db.RouteStops.AsNoTracking()
+            .Where(rs => routeIds.Contains(rs.RouteId))
+            .Include(rs => rs.Stop)
+            .OrderBy(rs => rs.SequenceNo)
+            .ToListAsync(ct);
+
+        var runningBuses = await _tracking.LiveAsync(ct);
+        var result = new List<object>();
+
+        foreach (var route in routes)
+        {
+            var stops = routeStops.Where(rs => rs.RouteId == route.Id).OrderBy(rs => rs.SequenceNo).ToList();
+            if (stops.Count == 0) continue;
+
+            var path = await _tracking.LoadPath(route.Id, ct);
+            var busesOnRoute = runningBuses.Where(b => b.RouteId == route.Id).ToList();
+
+            result.Add(new
+            {
+                route.Id,
+                route.Code,
+                route.Name,
+                distanceKm = route.DistanceKm ?? stops.LastOrDefault()?.DistanceFromOriginKm,
+                origin = stops.First().Stop.Name,
+                destination = stops.Last().Stop.Name,
+                stops = stops.Select(s => new
+                {
+                    s.StopId,
+                    name = s.Stop.Name,
+                    code = s.Stop.Code,
+                    s.SequenceNo,
+                    latitude = (double)s.Stop.Latitude,
+                    longitude = (double)s.Stop.Longitude,
+                    distanceKm = (double)s.DistanceFromOriginKm
+                }),
+                path = path.Select(p => new { latitude = p.Lat, longitude = p.Lng }),
+                liveCount = busesOnRoute.Count,
+                hasLiveBus = busesOnRoute.Count > 0,
+                runningBuses = busesOnRoute
+            });
+        }
+
+        return Ok(result);
+    }
+
+    [HttpGet("routes/{id:int}/snapshot")]
+    public async Task<IActionResult> RouteSnapshot(int id, CancellationToken ct)
+    {
+        var snap = await _tracking.GetRouteSnapshotAsync(id, ct);
+        if (snap is null) return NotFound(new { message = $"Route {id} not found." });
+        return Ok(snap);
+    }
+
+    [HttpGet("trips/{tripId:int}/eta")]
+    public async Task<IActionResult> GetTripEta(int tripId, CancellationToken ct)
+    {
+        var response = await _tracking.GetTripEtasAsync(tripId, ct);
+        if (response is null) return NotFound(new { message = $"Trip {tripId} not found." });
+        return Ok(response);
+    }
+
+    [HttpPost("trips/{tripId:int}/recalculate-eta")]
+    public async Task<IActionResult> RecalculateEta(int tripId, CancellationToken ct)
+    {
+        var snap = await _tracking.RecalculateTripEtasAsync(tripId, ct);
+        return Ok(snap);
+    }
+
+    [HttpPost("trips/{tripId:int}/gps")]
+    public async Task<IActionResult> IngestGps(int tripId, LocationRequest request, CancellationToken ct)
+    {
+        if (request.Latitude is < -90 or > 90 || request.Longitude is < -180 or > 180)
+            return BadRequest(new { message = "That location is not valid." });
+        var snap = await _tracking.IngestAsync(tripId, request.Latitude, request.Longitude, request.SpeedKmph, request.Heading, false, ct);
+        return Ok(snap);
+    }
 
     [Authorize]
     [HttpGet("favorites")]

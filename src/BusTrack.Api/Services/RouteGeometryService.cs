@@ -6,8 +6,22 @@ namespace BusTrack.Api.Services;
 public class RouteGeometryService
 {
     private readonly AppDbContext _db;
+    private readonly RoadRouter _roads;
 
-    public RouteGeometryService(AppDbContext db) => _db = db;
+    public RouteGeometryService(AppDbContext db, RoadRouter roads)
+    {
+        _db = db;
+        _roads = roads;
+    }
+
+    public async Task<int> RebuildAllRoutesAsync(CancellationToken ct = default)
+    {
+        var ids = await _db.Routes.Where(r => r.IsActive).Select(r => r.Id).ToListAsync(ct);
+        foreach (var id in ids) await RebuildAsync(id, ct);
+        return ids.Count;
+    }
+
+    public Task<int> RebuildAutoRoutesAsync(CancellationToken ct = default) => RebuildAllRoutesAsync(ct);
 
     public async Task RebuildAsync(int routeId, CancellationToken ct = default)
     {
@@ -18,14 +32,47 @@ public class RouteGeometryService
             .OrderBy(rs => rs.SequenceNo)
             .ToListAsync(ct);
 
+        (double[] LegKm, List<LatLng> Points)? road = null;
+        if (stops.Count >= 2)
+        {
+            var waypoints = stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList();
+            try { road = await _roads.DriveAsync(waypoints, ct); }
+            catch (Exception) { road = null; }
+        }
+
         double acc = 0;
         for (int i = 0; i < stops.Count; i++)
         {
             if (i > 0)
             {
-                var prev = stops[i - 1].Stop;
-                var cur = stops[i].Stop;
-                acc += Geo.HaversineKm((double)prev.Latitude, (double)prev.Longitude, (double)cur.Latitude, (double)cur.Longitude);
+                if (route.DistanceMode == "Manual")
+                {
+                    var seg = stops[i].SegmentDistanceKm;
+                    if (seg.HasValue && seg.Value > 0)
+                    {
+                        acc += (double)seg.Value;
+                    }
+                    else if (road is not null && i - 1 < road.Value.LegKm.Length)
+                    {
+                        acc += road.Value.LegKm[i - 1];
+                    }
+                    else
+                    {
+                        var prev = stops[i - 1].Stop;
+                        var cur = stops[i].Stop;
+                        acc += Geo.HaversineKm((double)prev.Latitude, (double)prev.Longitude, (double)cur.Latitude, (double)cur.Longitude);
+                    }
+                }
+                else if (road is not null && i - 1 < road.Value.LegKm.Length)
+                {
+                    acc += road.Value.LegKm[i - 1];
+                }
+                else
+                {
+                    var prev = stops[i - 1].Stop;
+                    var cur = stops[i].Stop;
+                    acc += Geo.HaversineKm((double)prev.Latitude, (double)prev.Longitude, (double)cur.Latitude, (double)cur.Longitude);
+                }
             }
             stops[i].DistanceFromOriginKm = Math.Round((decimal)acc, 2);
         }
@@ -34,7 +81,9 @@ public class RouteGeometryService
         var existingPoints = await _db.RoutePoints.Where(p => p.RouteId == routeId).ToListAsync(ct);
         _db.RoutePoints.RemoveRange(existingPoints);
 
-        var dense = Geo.Densify(stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList());
+        var dense = road is not null && road.Value.Points.Count >= 2
+            ? road.Value.Points
+            : Geo.Densify(stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList());
         var seq = 1;
         foreach (var point in dense)
         {

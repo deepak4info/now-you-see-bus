@@ -39,10 +39,27 @@ export function LoginPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const cleanLogin = login.trim();
+    if (!cleanLogin) {
+      setError(mode === "driver" ? "Please enter your Driver ID." : "Please enter your email address.");
+      return;
+    }
+    if (mode !== "driver") {
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailPattern.test(cleanLogin)) {
+        setError("Please enter a valid email address.");
+        return;
+      }
+    }
+    if (!password) {
+      setError("Please enter your password.");
+      return;
+    }
+
     setBusy(true);
     setError("");
     try {
-      const user = await auth.login(login, password);
+      const user = await auth.login(cleanLogin, password);
       const next = params.get("next");
       if (user.role === "Admin") navigate("/admin");
       else if (user.role === "Driver") navigate("/driver");
@@ -71,15 +88,29 @@ export function LoginPage() {
           </button>
         ))}
       </div>
-      <form onSubmit={submit} className="mt-5 grid gap-4 rounded-2xl border bg-card p-5">
+      <form onSubmit={submit} className="mt-5 grid gap-4 rounded-2xl border bg-card p-5" noValidate={false}>
         <div className="grid gap-1.5">
           <Label htmlFor="login">{mode === "driver" ? "Driver ID" : "Email"}</Label>
-          <Input id="login" value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" />
+          <Input
+            id="login"
+            type={mode === "driver" ? "text" : "email"}
+            required
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+            autoComplete="username"
+          />
           <p className="text-xs text-muted-foreground">{current.hint}. Sample: {current.sample}</p>
         </div>
         <div className="grid gap-1.5">
           <Label htmlFor="password">Password</Label>
-          <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+          <Input
+            id="password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
         <Button type="submit" disabled={busy}>{busy ? "Checking…" : "Sign in"}</Button>

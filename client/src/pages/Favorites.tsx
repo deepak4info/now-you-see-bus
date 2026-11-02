@@ -38,7 +38,11 @@ export function FavoritesPage() {
             <div className="flex gap-2">
               {item.fleetNumber && (
                 <Button asChild>
-                  <Link to={`/track/${item.fleetNumber}?from=${encodeURIComponent(item.fromStop ?? "")}&to=${encodeURIComponent(item.toStop ?? "")}`}>Track</Link>
+                  <Link to={`/track/${item.fleetNumber}?${new URLSearchParams({
+                    from: item.fromStop ?? "",
+                    to: item.toStop ?? "",
+                    ...(item.routeId != null ? { routeId: String(item.routeId) } : {}),
+                  }).toString()}`}>Track</Link>
                 </Button>
               )}
               <Button variant="outline" onClick={() => void remove(item.id)}>Remove</Button>

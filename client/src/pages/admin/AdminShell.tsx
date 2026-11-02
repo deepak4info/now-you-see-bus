@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 const items = [
   ["", "Overview"],
   ["operators", "Operators"],
+  ["bulk-upload", "Bulk upload"],
+    ["drivers", "Drivers"],
   ["buses", "Buses"],
-  ["drivers", "Drivers"],
   ["stops", "Stops"],
   ["routes", "Routes"],
   ["schedules", "Schedules"],
@@ -18,7 +19,7 @@ const items = [
 export function AdminShell() {
   const { user, logout } = useAuth();
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[220px_1fr]">
+    <div className="min-h-screen md:grid md:grid-cols-[220px_minmax(0,1fr)]">
       <aside className="border-b bg-ink text-paper md:min-h-screen md:border-b-0 md:border-r">
         <div className="px-4 py-4">
           <p className="text-xs uppercase tracking-[0.18em] text-gold">Dispatch</p>
@@ -41,7 +42,7 @@ export function AdminShell() {
           <Button variant="outline" className="w-full border-white/20 bg-transparent text-paper hover:bg-white/10" onClick={logout}>Sign out</Button>
         </div>
       </aside>
-      <div className="px-4 py-6 md:px-8">
+      <div className="min-w-0 px-4 py-6 md:px-8">
         <Outlet />
       </div>
     </div>

@@ -27,6 +27,14 @@ export type StopOnTrip = {
   scheduledTime: string;
   status: string;
   etaMinutes: number | null;
+  scheduledArrival?: string | null;
+  estimatedArrival?: string | null;
+  actualArrival?: string | null;
+  scheduledDeparture?: string | null;
+  estimatedDeparture?: string | null;
+  actualDeparture?: string | null;
+  delayMinutes?: number | null;
+  displayStatus?: string | null;
 };
 
 export type TrackSnapshot = {
@@ -56,6 +64,10 @@ export type TrackSnapshot = {
   simulation: boolean;
   operationsLive: boolean;
   departureTime: string;
+  actualDepartureTime?: string | null;
+  estimatedDepartureTime?: string | null;
+  delayStatus?: string | null;
+  lastEtaUpdate?: string | null;
   serviceDate: string;
   fare: number | null;
   fromStop: string | null;
@@ -98,4 +110,28 @@ export type Notice = {
   kind: string;
   isRead: boolean;
   createdAt: string;
+};
+
+export type PublicRouteStop = {
+  stopId: number;
+  name: string;
+  code: string;
+  sequenceNo: number;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+};
+
+export type PublicRoute = {
+  id: number;
+  code: string;
+  name: string;
+  distanceKm: number | null;
+  origin: string;
+  destination: string;
+  stops: PublicRouteStop[];
+  path: { latitude: number; longitude: number }[];
+  liveCount: number;
+  hasLiveBus: boolean;
+  runningBuses: TrackSnapshot[];
 };

@@ -2,6 +2,8 @@ namespace BusTrack.Api;
 
 public record PointDto(double Latitude, double Longitude);
 
+public record VisitorRegistrationRequest(Guid VisitorId);
+
 public record StopOnTripDto
 {
     public int StopId { get; init; }
@@ -14,6 +16,14 @@ public record StopOnTripDto
     public string ScheduledTime { get; init; } = "";
     public string Status { get; init; } = "Pending";
     public int? EtaMinutes { get; init; }
+    public string? ScheduledArrival { get; init; }
+    public string? EstimatedArrival { get; init; }
+    public string? ActualArrival { get; init; }
+    public string? ScheduledDeparture { get; init; }
+    public string? EstimatedDeparture { get; init; }
+    public string? ActualDeparture { get; init; }
+    public int? DelayMinutes { get; init; }
+    public string? DisplayStatus { get; init; }
 }
 
 public record TrackSnapshotDto
@@ -44,6 +54,10 @@ public record TrackSnapshotDto
     public bool Simulation { get; init; }
     public bool OperationsLive { get; init; }
     public string DepartureTime { get; init; } = "";
+    public string? ActualDepartureTime { get; init; }
+    public string? EstimatedDepartureTime { get; init; }
+    public string? DelayStatus { get; init; }
+    public DateTime? LastEtaUpdate { get; init; }
     public string ServiceDate { get; init; } = "";
     public decimal? Fare { get; init; }
     public string? FromStop { get; init; }
@@ -54,6 +68,21 @@ public record TrackSnapshotDto
     public int? DepartsInMinutes { get; init; }
     public List<StopOnTripDto> Stops { get; init; } = new();
     public List<PointDto> Path { get; init; } = new();
+}
+
+public record TripEtaResponseDto
+{
+    public int TripId { get; init; }
+    public string FleetNumber { get; init; } = "";
+    public string RouteName { get; init; } = "";
+    public string Status { get; init; } = "";
+    public string DelayStatus { get; init; } = "";
+    public int? DelayMinutes { get; init; }
+    public string ScheduledDeparture { get; init; } = "";
+    public string? ActualDeparture { get; init; }
+    public string? EstimatedDeparture { get; init; }
+    public DateTime LastUpdatedAt { get; init; }
+    public List<StopOnTripDto> Stops { get; init; } = new();
 }
 
 public record LoginRequest(string Login, string Password);
@@ -70,8 +99,26 @@ public record StartTripRequest(string Mode);
 public record OperatorRequest(string Name, string Code, string? ContactName, string? Phone, string? Email);
 public record BusRequest(int OperatorId, string FleetNumber, string RegistrationNumber, string? Model, int Capacity, string BusType, int? AssignedDriverId);
 public record DriverRequest(string FullName, string DriverCode, string Email, string? Phone, string Password, string LicenseNumber, int? OperatorId);
+public record DriverUpdateRequest(string FullName, string DriverCode, string Email, string? Phone, string? Password, string LicenseNumber, int? OperatorId);
 public record StopRequest(string Name, string Code, double Latitude, double Longitude, string? Address, string? City);
-public record RouteRequest(string Code, string Name, int? OperatorId, List<int> StopIds);
+public record RouteRequest(
+    string Code,
+    string Name,
+    int? OperatorId,
+    List<int> StopIds,
+    string DistanceMode = "Auto",
+    List<double>? SegmentDistancesKm = null);
 public record FareInput(int FromStopId, int ToStopId, decimal Amount);
 public record FareUpdateRequest(List<FareInput> Fares);
 public record ScheduleRequest(int RouteId, int? BusId, int? DriverId, string DepartureTime, string? ServiceDays);
+
+public record BulkDeleteRequest(List<int> Ids);
+public record BulkDeleteResponse(int Deleted, int Skipped, string Message, List<string>? SkippedReasons = null);
+
+public record BulkUpdateStopsRequest(List<int> Ids, string? City, string? Address);
+public record BulkUpdateBusesRequest(List<int> Ids, int? OperatorId, string? BusType, int? Capacity, int? AssignedDriverId);
+public record BulkUpdateDriversRequest(List<int> Ids, int? OperatorId);
+public record BulkUpdateOperatorsRequest(List<int> Ids, string? ContactName, string? Phone);
+public record BulkUpdateRoutesRequest(List<int> Ids, int? OperatorId, string? DistanceMode);
+public record BulkUpdateSchedulesRequest(List<int> Ids, string? ServiceDays, int? BusId, int? DriverId);
+public record BulkOperationResult(int SuccessCount, int SkippedCount, string Message, List<string>? Errors = null);

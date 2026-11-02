@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Visitor> Visitors => Set<Visitor>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +43,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Route>().ToTable("Routes");
         modelBuilder.Entity<Route>().Property(r => r.DistanceKm).HasPrecision(8, 2);
         modelBuilder.Entity<RouteStop>().ToTable("RouteStops");
+        modelBuilder.Entity<RouteStop>().Property(r => r.SegmentDistanceKm).HasPrecision(8, 2);
         modelBuilder.Entity<RouteStop>().Property(r => r.DistanceFromOriginKm).HasPrecision(8, 2);
         modelBuilder.Entity<RoutePoint>().ToTable("RoutePoints");
         modelBuilder.Entity<RoutePoint>().Property(p => p.Latitude).HasPrecision(9, 6);
@@ -67,6 +69,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<GpsPing>().Property(p => p.SpeedKmph).HasPrecision(6, 2);
         modelBuilder.Entity<GpsPing>().Property(p => p.Heading).HasPrecision(6, 2);
         modelBuilder.Entity<TripStopEta>().ToTable("TripStopEtas");
+        modelBuilder.Entity<TripStopEta>()
+            .HasOne(e => e.Stop)
+            .WithMany()
+            .HasForeignKey(e => e.StopId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Favorite>().ToTable("Favorites");
         modelBuilder.Entity<Favorite>()
             .HasOne(f => f.FromStop)
@@ -82,5 +89,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SystemSetting>().ToTable("SystemSettings");
         modelBuilder.Entity<SystemSetting>().HasKey(s => s.Key);
         modelBuilder.Entity<AuditLog>().ToTable("AuditLogs");
+        modelBuilder.Entity<Visitor>().ToTable("Visitors");
+        modelBuilder.Entity<Visitor>().HasKey(v => v.Id);
     }
 }

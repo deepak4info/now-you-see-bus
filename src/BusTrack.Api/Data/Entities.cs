@@ -72,6 +72,7 @@ public class Route
     public string Name { get; set; } = "";
     public int? OperatorId { get; set; }
     public Operator? Operator { get; set; }
+    public string DistanceMode { get; set; } = "Auto";
     public decimal? DistanceKm { get; set; }
     public bool IsActive { get; set; } = true;
     public List<RouteStop> Stops { get; set; } = new();
@@ -85,6 +86,7 @@ public class RouteStop
     public int StopId { get; set; }
     public Stop Stop { get; set; } = null!;
     public int SequenceNo { get; set; }
+    public decimal? SegmentDistanceKm { get; set; }
     public decimal DistanceFromOriginKm { get; set; }
 }
 
@@ -159,12 +161,18 @@ public class TripStopEta
     public int Id { get; set; }
     public int TripId { get; set; }
     public int StopId { get; set; }
+    public Stop Stop { get; set; } = null!;
     public int SequenceNo { get; set; }
     public DateTime? ScheduledArrival { get; set; }
     public DateTime? EstimatedArrival { get; set; }
     public DateTime? ActualArrival { get; set; }
+    public DateTime? ScheduledDeparture { get; set; }
+    public DateTime? EstimatedDeparture { get; set; }
+    public DateTime? ActualDeparture { get; set; }
+    public int? DelayMinutes { get; set; }
     public int? EtaMinutes { get; set; }
     public string Status { get; set; } = "Pending";
+    public DateTime? LastUpdatedAt { get; set; }
 }
 
 public class Favorite
@@ -211,4 +219,10 @@ public class AuditLog
     public string? EntityId { get; set; }
     public string? Detail { get; set; }
     public DateTime CreatedAt { get; set; }
+}
+
+public class Visitor
+{
+    public Guid Id { get; set; }
+    public DateTime FirstSeenAt { get; set; }
 }

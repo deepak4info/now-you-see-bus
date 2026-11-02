@@ -111,6 +111,7 @@ BEGIN
         Code NVARCHAR(20) NOT NULL,
         Name NVARCHAR(150) NOT NULL,
         OperatorId INT NULL,
+        DistanceMode NVARCHAR(10) NOT NULL CONSTRAINT DF_Routes_DistanceMode DEFAULT N'Auto',
         DistanceKm DECIMAL(8,2) NULL,
         IsActive BIT NOT NULL CONSTRAINT DF_Routes_IsActive DEFAULT 1,
         CONSTRAINT UQ_Routes_Code UNIQUE (Code),
@@ -125,6 +126,7 @@ BEGIN
         RouteId INT NOT NULL,
         StopId INT NOT NULL,
         SequenceNo INT NOT NULL,
+        SegmentDistanceKm DECIMAL(8,2) NULL,
         DistanceFromOriginKm DECIMAL(8,2) NOT NULL CONSTRAINT DF_RouteStops_Dist DEFAULT 0,
         CONSTRAINT UQ_RouteStops_Sequence UNIQUE (RouteId, SequenceNo),
         CONSTRAINT UQ_RouteStops_Stop UNIQUE (RouteId, StopId),
@@ -132,6 +134,12 @@ BEGIN
         CONSTRAINT FK_RouteStops_Stops FOREIGN KEY (StopId) REFERENCES dbo.Stops(Id)
     );
 END;
+
+IF COL_LENGTH(N'dbo.Routes', N'DistanceMode') IS NULL
+    ALTER TABLE dbo.Routes ADD DistanceMode NVARCHAR(10) NOT NULL CONSTRAINT DF_Routes_DistanceMode DEFAULT N'Auto';
+
+IF COL_LENGTH(N'dbo.RouteStops', N'SegmentDistanceKm') IS NULL
+    ALTER TABLE dbo.RouteStops ADD SegmentDistanceKm DECIMAL(8,2) NULL;
 
 IF OBJECT_ID(N'dbo.RoutePoints', N'U') IS NULL
 BEGIN
@@ -228,13 +236,29 @@ BEGIN
         ScheduledArrival DATETIME2 NULL,
         EstimatedArrival DATETIME2 NULL,
         ActualArrival DATETIME2 NULL,
+        ScheduledDeparture DATETIME2 NULL,
+        EstimatedDeparture DATETIME2 NULL,
+        ActualDeparture DATETIME2 NULL,
+        DelayMinutes INT NULL,
         EtaMinutes INT NULL,
         Status NVARCHAR(20) NOT NULL,
+        LastUpdatedAt DATETIME2 NULL,
         CONSTRAINT UQ_TripStopEtas UNIQUE (TripId, StopId),
         CONSTRAINT FK_TripStopEtas_Trips FOREIGN KEY (TripId) REFERENCES dbo.Trips(Id),
         CONSTRAINT FK_TripStopEtas_Stops FOREIGN KEY (StopId) REFERENCES dbo.Stops(Id)
     );
 END;
+
+IF COL_LENGTH(N'dbo.TripStopEtas', N'ScheduledDeparture') IS NULL
+    ALTER TABLE dbo.TripStopEtas ADD ScheduledDeparture DATETIME2 NULL;
+IF COL_LENGTH(N'dbo.TripStopEtas', N'EstimatedDeparture') IS NULL
+    ALTER TABLE dbo.TripStopEtas ADD EstimatedDeparture DATETIME2 NULL;
+IF COL_LENGTH(N'dbo.TripStopEtas', N'ActualDeparture') IS NULL
+    ALTER TABLE dbo.TripStopEtas ADD ActualDeparture DATETIME2 NULL;
+IF COL_LENGTH(N'dbo.TripStopEtas', N'DelayMinutes') IS NULL
+    ALTER TABLE dbo.TripStopEtas ADD DelayMinutes INT NULL;
+IF COL_LENGTH(N'dbo.TripStopEtas', N'LastUpdatedAt') IS NULL
+    ALTER TABLE dbo.TripStopEtas ADD LastUpdatedAt DATETIME2 NULL;
 
 IF OBJECT_ID(N'dbo.Favorites', N'U') IS NULL
 BEGIN
@@ -294,6 +318,14 @@ BEGIN
         CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Audit_Created DEFAULT SYSUTCDATETIME()
     );
     CREATE INDEX IX_AuditLogs_Created ON dbo.AuditLogs(CreatedAt DESC);
+END;
+
+IF OBJECT_ID(N'dbo.Visitors', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Visitors (
+        Id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Visitors PRIMARY KEY,
+        FirstSeenAt DATETIME2 NOT NULL CONSTRAINT DF_Visitors_FirstSeenAt DEFAULT SYSUTCDATETIME()
+    );
 END;
 GO
 

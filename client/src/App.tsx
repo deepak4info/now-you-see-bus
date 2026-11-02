@@ -3,15 +3,17 @@ import type { ReactNode } from "react";
 import { Shell } from "@/components/Shell";
 import { useAuth } from "@/lib/auth";
 import { HomePage } from "@/pages/Home";
+import { LiveRoutesPage } from "@/pages/LiveRoutes";
+import { EnquiryNumbersPage } from "@/pages/EnquiryNumbers";
 import { SearchPage } from "@/pages/Search";
 import { BusPage } from "@/pages/Bus";
 import { TrackPage } from "@/pages/Track";
 import { LoginPage } from "@/pages/Login";
-import { RegisterPage } from "@/pages/Register";
-import { FavoritesPage } from "@/pages/Favorites";
+
 import { NotificationsPage } from "@/pages/Notifications";
 import { DriverPage } from "@/pages/Driver";
 import { AdminShell } from "@/pages/admin/AdminShell";
+import { BulkUploadPage } from "@/pages/admin/BulkUpload";
 import { OverviewPage } from "@/pages/admin/Overview";
 import { BusesPage, DriversPage, LivePage, OperatorsPage, ReportsPage, RoutesPage, SchedulesPage, StopsPage } from "@/pages/admin/DataPages";
 
@@ -31,6 +33,7 @@ export default function App() {
       <Route path="/admin" element={<Guard roles={["Admin"]}><AdminShell /></Guard>}>
         <Route index element={<OverviewPage />} />
         <Route path="operators" element={<OperatorsPage />} />
+        <Route path="bulk-upload" element={<BulkUploadPage />} />
         <Route path="buses" element={<BusesPage />} />
         <Route path="drivers" element={<DriversPage />} />
         <Route path="stops" element={<StopsPage />} />
@@ -41,12 +44,12 @@ export default function App() {
       </Route>
       <Route element={<Shell><Outlet /></Shell>}>
         <Route index element={<HomePage />} />
+        <Route path="routes" element={<LiveRoutesPage />} />
+        <Route path="enquiry-numbers" element={<EnquiryNumbersPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="bus/:fleet" element={<BusPage />} />
         <Route path="track/:fleet" element={<TrackPage />} />
         <Route path="login" element={<LoginPage />} />
-        <Route path="register" element={<RegisterPage />} />
-        <Route path="favorites" element={<Guard><FavoritesPage /></Guard>} />
         <Route path="notifications" element={<Guard><NotificationsPage /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

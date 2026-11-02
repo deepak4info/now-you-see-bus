@@ -156,10 +156,25 @@ public static class IndiaClock
 
     public static string Clock(TimeOnly time) => time.ToString("HH:mm");
 
+    public static string FormatClock12(TimeOnly time) => time.ToString("hh:mm tt");
+
+    public static string? FormatClock12(DateTime? utc)
+    {
+        if (!utc.HasValue) return null;
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc.Value, Tz);
+        return local.ToString("hh:mm tt");
+    }
+
     public static string ClockFromDeparture(TimeOnly departure, double distanceKm)
     {
         int mins = Geo.EtaMinutes(distanceKm, Geo.RoadSpeedKmph);
         return departure.AddMinutes(mins).ToString("HH:mm");
+    }
+
+    public static string Clock12FromDeparture(TimeOnly departure, double distanceKm)
+    {
+        int mins = Geo.EtaMinutes(distanceKm, Geo.RoadSpeedKmph);
+        return departure.AddMinutes(mins).ToString("hh:mm tt");
     }
 
     public static int DayIndex(DateOnly date)

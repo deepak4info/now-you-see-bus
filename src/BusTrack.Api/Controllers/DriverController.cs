@@ -123,6 +123,26 @@ public class DriverController : ControllerBase
         return Ok(snap);
     }
 
+    [HttpPost("trips/{id:int}/stops/{stopId:int}/arrival")]
+    public async Task<IActionResult> ConfirmArrival(int id, int stopId, CancellationToken ct)
+    {
+        var trip = await OwnTrip(id, ct);
+        if (trip is null) return NotFound(new { message = "That trip is not assigned to you." });
+        if (trip.Status != "Running") return BadRequest(new { message = "Start the trip before recording station arrival." });
+        var snap = await _tracking.MarkStopArrivalAsync(trip.Id, stopId, DateTime.UtcNow, ct);
+        return Ok(snap);
+    }
+
+    [HttpPost("trips/{id:int}/stops/{stopId:int}/departure")]
+    public async Task<IActionResult> ConfirmDeparture(int id, int stopId, CancellationToken ct)
+    {
+        var trip = await OwnTrip(id, ct);
+        if (trip is null) return NotFound(new { message = "That trip is not assigned to you." });
+        if (trip.Status != "Running") return BadRequest(new { message = "Start the trip before recording station departure." });
+        var snap = await _tracking.MarkStopDepartureAsync(trip.Id, stopId, DateTime.UtcNow, ct);
+        return Ok(snap);
+    }
+
     [HttpPost("trips/{id:int}/replay")]
     public async Task<IActionResult> Replay(int id, CancellationToken ct)
     {

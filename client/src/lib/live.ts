@@ -17,7 +17,12 @@ function mergeLeg(previous: TrackSnapshot | null, next: TrackSnapshot): TrackSna
   };
 }
 
-export function useBusLive(fleet: string | null, seed: TrackSnapshot | null) {
+export function useBusLive(
+  fleet: string | null,
+  seed: TrackSnapshot | null,
+  selectedRouteId?: number,
+  subscribeToLive = true,
+) {
   const [snap, setSnap] = useState<TrackSnapshot | null>(seed);
 
   useEffect(() => {
@@ -25,11 +30,16 @@ export function useBusLive(fleet: string | null, seed: TrackSnapshot | null) {
   }, [seed]);
 
   useEffect(() => {
-    if (!fleet) return;
+    if (!fleet || !subscribeToLive) return;
     let active = true;
     const conn = new HubConnectionBuilder().withUrl("/hubs/tracking").withAutomaticReconnect().build();
     conn.on("location", (payload: TrackSnapshot) => {
-      if (payload.fleetNumber === fleet) setSnap((current) => mergeLeg(current, payload));
+      if (
+        payload.fleetNumber === fleet
+        && (selectedRouteId == null || payload.routeId === selectedRouteId)
+      ) {
+        setSnap((current) => mergeLeg(current, payload));
+      }
     });
     conn.onreconnected(() => {
       if (active) void conn.invoke("JoinBus", fleet);
@@ -44,7 +54,7 @@ export function useBusLive(fleet: string | null, seed: TrackSnapshot | null) {
       active = false;
       if (conn.state === "Connected") void conn.stop();
     };
-  }, [fleet]);
+  }, [fleet, selectedRouteId, subscribeToLive]);
 
   return snap;
 }

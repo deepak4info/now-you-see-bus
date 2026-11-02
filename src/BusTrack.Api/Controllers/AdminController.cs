@@ -87,6 +87,66 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> Operators(CancellationToken ct) =>
         Ok(await _db.Operators.AsNoTracking().Where(o => o.IsActive).OrderBy(o => o.Name).ToListAsync(ct));
 
+    [HttpGet("import-lookups")]
+    public async Task<IActionResult> ImportLookups(CancellationToken ct)
+    {
+        var operators = await _db.Operators.AsNoTracking()
+            .Select(o => new { o.Id, o.Code, o.IsActive })
+            .ToListAsync(ct);
+        var drivers = await _db.Drivers.AsNoTracking()
+            .Include(d => d.User)
+            .Select(d => new
+            {
+                d.Id,
+                driverCode = d.User.DriverCode ?? "",
+                d.User.Email,
+                d.OperatorId,
+                isActive = d.IsActive && d.User.IsActive
+            })
+            .ToListAsync(ct);
+        var buses = await _db.Buses.AsNoTracking()
+            .Select(b => new { b.Id, b.FleetNumber, b.RegistrationNumber })
+            .ToListAsync(ct);
+        var rawStops = await _db.Stops.AsNoTracking().Where(s => s.IsActive).ToListAsync(ct);
+        var stops = StopNormalizer.DeduplicateStopsList(rawStops)
+            .Select(s => new { s.Id, s.Code, s.Name })
+            .ToList();
+        var routes = await _db.Routes.AsNoTracking()
+            .Where(r => r.IsActive)
+            .Select(r => new { r.Id, r.Code, r.Name })
+            .ToListAsync(ct);
+        var scheduleRows = await _db.Schedules.AsNoTracking()
+            .Where(s => s.IsActive)
+            .Select(s => new { s.RouteId, s.BusId, s.DepartureTime })
+            .ToListAsync(ct);
+        var schedules = scheduleRows.Select(s => new
+        {
+            s.RouteId,
+            s.BusId,
+            departure = s.DepartureTime.ToString("HH:mm")
+        });
+        return Ok(new { operators, drivers, buses, stops, routes, schedules });
+    }
+
+    [HttpGet("audit-logs")]
+    public async Task<IActionResult> AuditLogs([FromQuery] int limit = 50, CancellationToken ct = default)
+    {
+        var logs = await _db.AuditLogs.AsNoTracking()
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(Math.Clamp(limit, 1, 200))
+            .Select(a => new
+            {
+                a.Id,
+                a.Action,
+                a.Entity,
+                a.EntityId,
+                a.Detail,
+                a.CreatedAt
+            })
+            .ToListAsync(ct);
+        return Ok(logs);
+    }
+
     [HttpPost("operators")]
     public async Task<IActionResult> CreateOperator(OperatorRequest request, CancellationToken ct)
     {
@@ -139,6 +199,71 @@ public class AdminController : ControllerBase
         row.IsActive = false;
         await _db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    [HttpPost("operators/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteOperators([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No operator IDs provided." });
+
+        var ops = await _db.Operators.Where(o => request.Ids.Contains(o.Id) && o.IsActive).ToListAsync(ct);
+        var hasBusesOpIds = await _db.Buses
+            .Where(b => request.Ids.Contains(b.OperatorId) && b.IsActive)
+            .Select(b => b.OperatorId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var hasBusesSet = hasBusesOpIds.ToHashSet();
+        var deleted = 0;
+        var skipped = 0;
+        var reasons = new List<string>();
+
+        foreach (var o in ops)
+        {
+            if (hasBusesSet.Contains(o.Id))
+            {
+                skipped++;
+                reasons.Add($"Operator '{o.Name}' ({o.Code}) still has active buses assigned.");
+                continue;
+            }
+            o.IsActive = false;
+            deleted++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Operator", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
+        return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} operator(s). {skipped} skipped.", reasons));
+    }
+
+    [HttpPost("operators/bulk-update")]
+    public async Task<IActionResult> BulkUpdateOperators([FromBody] BulkUpdateOperatorsRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No operator IDs provided." });
+
+        var ops = await _db.Operators.Where(o => request.Ids.Contains(o.Id) && o.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var o in ops)
+        {
+            var modified = false;
+            if (!string.IsNullOrWhiteSpace(request.ContactName))
+            {
+                o.ContactName = request.ContactName.Trim();
+                modified = true;
+            }
+            if (!string.IsNullOrWhiteSpace(request.Phone))
+            {
+                o.Phone = request.Phone.Trim();
+                modified = true;
+            }
+            if (modified) updated++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Operator", string.Join(",", request.Ids), $"Updated {updated} operators", ct);
+        return Ok(new BulkOperationResult(updated, ops.Count - updated, $"Updated {updated} operator(s)."));
     }
 
     [HttpGet("buses")]
@@ -214,6 +339,81 @@ public class AdminController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("buses/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteBuses([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No bus IDs provided." });
+
+        var buses = await _db.Buses.Where(b => request.Ids.Contains(b.Id) && b.IsActive).ToListAsync(ct);
+        var inScheduleBusIds = await _db.Schedules
+            .Where(s => s.BusId.HasValue && request.Ids.Contains(s.BusId.Value) && s.IsActive)
+            .Select(s => s.BusId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var inScheduleSet = inScheduleBusIds.ToHashSet();
+        var deleted = 0;
+        var skipped = 0;
+        var reasons = new List<string>();
+
+        foreach (var b in buses)
+        {
+            if (inScheduleSet.Contains(b.Id))
+            {
+                skipped++;
+                reasons.Add($"Bus '{b.FleetNumber}' ({b.RegistrationNumber}) is currently assigned to an active schedule.");
+                continue;
+            }
+            b.IsActive = false;
+            deleted++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Bus", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
+        return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} bus(es). {skipped} skipped.", reasons));
+    }
+
+    [HttpPost("buses/bulk-update")]
+    public async Task<IActionResult> BulkUpdateBuses([FromBody] BulkUpdateBusesRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No bus IDs provided." });
+
+        var buses = await _db.Buses.Where(b => request.Ids.Contains(b.Id) && b.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var b in buses)
+        {
+            var modified = false;
+            if (request.OperatorId.HasValue && request.OperatorId.Value > 0)
+            {
+                b.OperatorId = request.OperatorId.Value;
+                modified = true;
+            }
+            if (!string.IsNullOrWhiteSpace(request.BusType))
+            {
+                b.BusType = request.BusType.Trim();
+                modified = true;
+            }
+            if (request.Capacity.HasValue && request.Capacity.Value > 0)
+            {
+                b.Capacity = request.Capacity.Value;
+                modified = true;
+            }
+            if (request.AssignedDriverId.HasValue)
+            {
+                b.AssignedDriverId = request.AssignedDriverId.Value > 0 ? request.AssignedDriverId.Value : null;
+                modified = true;
+            }
+            if (modified) updated++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Bus", string.Join(",", request.Ids), $"Updated {updated} buses", ct);
+        return Ok(new BulkOperationResult(updated, buses.Count - updated, $"Updated {updated} bus(es)."));
+    }
+
     [HttpGet("drivers")]
     public async Task<IActionResult> Drivers(CancellationToken ct)
     {
@@ -242,7 +442,10 @@ public class AdminController : ControllerBase
         if (code.Length < 3) return BadRequest(new { message = "Driver ID should be at least 3 characters." });
         if (!email.Contains('@')) return BadRequest(new { message = "Enter an email for the driver." });
         if (request.Password.Length < 8) return BadRequest(new { message = "Use a password of at least 8 characters." });
-        if (request.LicenseNumber.Trim().Length < 3) return BadRequest(new { message = "Enter a licence number." });
+        var license = request.LicenseNumber.Trim();
+        if (license.Length < 3) return BadRequest(new { message = "Enter a licence number." });
+        if (await _db.Drivers.AnyAsync(d => d.LicenseNumber == license, ct))
+            return BadRequest(new { message = "That driving licence number is already registered." });
         if (await _db.Users.AnyAsync(u => u.Email == email || u.DriverCode == code, ct))
             return BadRequest(new { message = "That email or driver ID is already used." });
 
@@ -272,6 +475,44 @@ public class AdminController : ControllerBase
         return Ok(new { driver.Id, user.DriverCode });
     }
 
+    [HttpPut("drivers/{id:int}")]
+    public async Task<IActionResult> UpdateDriver(int id, DriverUpdateRequest request, CancellationToken ct)
+    {
+        var row = await _db.Drivers.Include(d => d.User)
+            .FirstOrDefaultAsync(d => d.Id == id && d.IsActive, ct);
+        if (row is null) return NotFound(new { message = "Driver not found." });
+
+        var code = request.DriverCode.Trim().ToUpperInvariant();
+        var email = request.Email.Trim();
+        if (request.FullName.Trim().Length < 2) return BadRequest(new { message = "Enter the driver's name." });
+        if (code.Length < 3) return BadRequest(new { message = "Driver ID should be at least 3 characters." });
+        if (!email.Contains('@')) return BadRequest(new { message = "Enter an email for the driver." });
+        if (!string.IsNullOrEmpty(request.Password) && request.Password.Length < 8)
+            return BadRequest(new { message = "Use a password of at least 8 characters." });
+        var license = request.LicenseNumber.Trim();
+        if (license.Length < 3) return BadRequest(new { message = "Enter a licence number." });
+        if (await _db.Drivers.AnyAsync(d => d.Id != id && d.LicenseNumber == license, ct))
+            return BadRequest(new { message = "That driving licence number is already registered." });
+        if (await _db.Users.AnyAsync(u => u.Id != row.UserId && (u.Email == email || u.DriverCode == code), ct))
+            return BadRequest(new { message = "That email or driver ID is already used." });
+        if (request.OperatorId is int operatorId &&
+            !await _db.Operators.AnyAsync(o => o.Id == operatorId && o.IsActive, ct))
+            return BadRequest(new { message = "Choose an operator who is active." });
+
+        row.User.FullName = request.FullName.Trim();
+        row.User.DriverCode = code;
+        row.User.Email = email;
+        row.User.Phone = Blank(request.Phone);
+        row.LicenseNumber = request.LicenseNumber.Trim();
+        row.OperatorId = request.OperatorId;
+        if (!string.IsNullOrEmpty(request.Password))
+            row.User.PasswordHash = _passwords.HashPassword(row.User, request.Password);
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "Update", "Driver", row.Id.ToString(), code, ct);
+        return Ok(new { row.Id, row.User.DriverCode });
+    }
+
     [HttpDelete("drivers/{id:int}")]
     public async Task<IActionResult> DeleteDriver(int id, CancellationToken ct)
     {
@@ -285,9 +526,87 @@ public class AdminController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("drivers/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteDrivers([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No driver IDs provided." });
+
+        var drivers = await _db.Drivers.Include(d => d.User).Where(d => request.Ids.Contains(d.Id) && d.IsActive).ToListAsync(ct);
+        var inScheduleDriverIds = await _db.Schedules
+            .Where(s => s.DriverId.HasValue && request.Ids.Contains(s.DriverId.Value) && s.IsActive)
+            .Select(s => s.DriverId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var inScheduleSet = inScheduleDriverIds.ToHashSet();
+        var deleted = 0;
+        var skipped = 0;
+        var reasons = new List<string>();
+
+        foreach (var d in drivers)
+        {
+            if (inScheduleSet.Contains(d.Id))
+            {
+                skipped++;
+                reasons.Add($"Driver '{d.User.FullName}' ({d.User.DriverCode}) is assigned to an active schedule.");
+                continue;
+            }
+            d.IsActive = false;
+            d.User.IsActive = false;
+            deleted++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Driver", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
+        return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} driver(s). {skipped} skipped.", reasons));
+    }
+
+    [HttpPost("drivers/bulk-update")]
+    public async Task<IActionResult> BulkUpdateDrivers([FromBody] BulkUpdateDriversRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No driver IDs provided." });
+
+        var drivers = await _db.Drivers.Where(d => request.Ids.Contains(d.Id) && d.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var d in drivers)
+        {
+            if (request.OperatorId.HasValue && request.OperatorId.Value > 0)
+            {
+                d.OperatorId = request.OperatorId.Value;
+                updated++;
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Driver", string.Join(",", request.Ids), $"Updated {updated} drivers", ct);
+        return Ok(new BulkOperationResult(updated, drivers.Count - updated, $"Updated {updated} driver(s)."));
+    }
+
     [HttpGet("stops")]
-    public async Task<IActionResult> Stops(CancellationToken ct) =>
-        Ok(await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct));
+    public async Task<IActionResult> Stops(CancellationToken ct)
+    {
+        var stops = await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct);
+        return Ok(StopNormalizer.DeduplicateStopsList(stops));
+    }
+
+    [HttpPost("stops/deduplicate")]
+    public async Task<IActionResult> DeduplicateStops(CancellationToken ct)
+    {
+        var merged = await DbInitializer.DeduplicateStopsAsync(_db, null, ct);
+        var active = await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct);
+        var uniqueStops = StopNormalizer.DeduplicateStopsList(active);
+        return Ok(new
+        {
+            merged,
+            remainingUniqueStops = uniqueStops.Count,
+            message = merged > 0
+                ? $"Successfully merged {merged} duplicate stops. All records are now unique."
+                : "All stops are already unique."
+        });
+    }
 
     [HttpPost("stops")]
     public async Task<IActionResult> CreateStop(StopRequest request, CancellationToken ct)
@@ -295,16 +614,24 @@ public class AdminController : ControllerBase
         var error = ValidateStop(request);
         if (error is not null) return BadRequest(new { message = error });
         var code = request.Code.Trim().ToUpperInvariant();
-        if (await _db.Stops.AnyAsync(s => s.Code == code, ct))
-            return BadRequest(new { message = "That stop code is already used." });
+        var name = request.Name.Trim();
+
+        if (await _db.Stops.AnyAsync(s => s.IsActive && s.Code == code, ct))
+            return BadRequest(new { message = $"Stop code '{code}' is already used." });
+
+        var existing = await _db.Stops.AsNoTracking().FirstOrDefaultAsync(s => s.IsActive && s.Name.ToLower() == name.ToLower(), ct);
+        if (existing is not null)
+            return BadRequest(new { message = $"A stop named '{name}' already exists (Code: {existing.Code})." });
+
         var row = new Stop
         {
-            Name = request.Name.Trim(),
+            Name = name,
             Code = code,
             Latitude = decimal.Round((decimal)request.Latitude, 6),
             Longitude = decimal.Round((decimal)request.Longitude, 6),
             Address = Blank(request.Address),
-            City = Blank(request.City)
+            City = Blank(request.City),
+            IsActive = true
         };
         _db.Stops.Add(row);
         await _db.SaveChangesAsync(ct);
@@ -346,26 +673,102 @@ public class AdminController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("stops/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteStops([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No stop IDs provided." });
+
+        var stops = await _db.Stops.Where(s => request.Ids.Contains(s.Id) && s.IsActive).ToListAsync(ct);
+        var inRoutesStopIds = await _db.RouteStops
+            .Where(rs => request.Ids.Contains(rs.StopId))
+            .Select(rs => rs.StopId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var inRoutesSet = inRoutesStopIds.ToHashSet();
+        var deletedCount = 0;
+        var skippedCount = 0;
+        var skippedReasons = new List<string>();
+
+        foreach (var stop in stops)
+        {
+            if (inRoutesSet.Contains(stop.Id))
+            {
+                skippedCount++;
+                skippedReasons.Add($"Stop '{stop.Name}' ({stop.Code}) is part of an active route.");
+                continue;
+            }
+
+            stop.IsActive = false;
+            deletedCount++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Stop", string.Join(",", request.Ids), $"Deleted {deletedCount}, skipped {skippedCount}", ct);
+        return Ok(new BulkDeleteResponse(deletedCount, skippedCount, $"Deleted {deletedCount} stop(s). {skippedCount} skipped.", skippedReasons));
+    }
+
+    [HttpPost("stops/bulk-update")]
+    public async Task<IActionResult> BulkUpdateStops([FromBody] BulkUpdateStopsRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No stop IDs provided." });
+
+        var stops = await _db.Stops.Where(s => request.Ids.Contains(s.Id) && s.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var stop in stops)
+        {
+            var modified = false;
+            if (!string.IsNullOrWhiteSpace(request.City))
+            {
+                stop.City = request.City.Trim();
+                modified = true;
+            }
+            if (!string.IsNullOrWhiteSpace(request.Address))
+            {
+                stop.Address = request.Address.Trim();
+                modified = true;
+            }
+            if (modified) updated++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Stop", string.Join(",", request.Ids), $"Updated {updated} stops", ct);
+        return Ok(new BulkOperationResult(updated, stops.Count - updated, $"Updated {updated} stop(s)."));
+    }
+
     [HttpGet("routes")]
     public async Task<IActionResult> Routes(CancellationToken ct)
     {
         var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
         var stops = await _db.RouteStops.AsNoTracking().Include(rs => rs.Stop).OrderBy(rs => rs.SequenceNo).ToListAsync(ct);
         var fares = await _db.FareSlabs.AsNoTracking().Include(f => f.FromStop).Include(f => f.ToStop).ToListAsync(ct);
+        var createdRows = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.Entity == "Route" && a.Action == "Create" && a.EntityId != null)
+            .Select(a => new { a.EntityId, a.CreatedAt })
+            .ToListAsync(ct);
+        var addedAtById = createdRows
+            .GroupBy(a => a.EntityId!)
+            .ToDictionary(g => g.Key, g => g.Max(a => a.CreatedAt));
         return Ok(routes.Select(r => new
         {
             r.Id,
             r.Code,
             r.Name,
             r.OperatorId,
+            r.DistanceMode,
             distanceKm = r.DistanceKm,
+            addedAt = addedAtById.TryGetValue(r.Id.ToString(), out var addedAt) ? addedAt : (DateTime?)null,
             stops = stops.Where(s => s.RouteId == r.Id).Select(s => new
             {
                 s.StopId,
                 s.Stop.Name,
                 s.Stop.Code,
                 s.SequenceNo,
-                distanceKm = s.DistanceFromOriginKm
+                distanceKm = s.DistanceFromOriginKm,
+                segmentDistanceKm = s.SegmentDistanceKm
             }),
             fares = fares.Where(f => f.RouteId == r.Id).Select(f => new
             {
@@ -380,6 +783,13 @@ public class AdminController : ControllerBase
         }));
     }
 
+    [HttpPost("routes/rebuild-roads")]
+    public async Task<IActionResult> RebuildRoadDistances(CancellationToken ct)
+    {
+        var count = await _geometry.RebuildAllRoutesAsync(ct);
+        return Ok(new { count, message = $"Recalculated road geometry for {count} route(s)." });
+    }
+
     [HttpPost("routes")]
     public async Task<IActionResult> CreateRoute(RouteRequest request, CancellationToken ct)
     {
@@ -390,11 +800,12 @@ public class AdminController : ControllerBase
             Code = request.Code.Trim(),
             Name = request.Name.Trim(),
             OperatorId = request.OperatorId,
+            DistanceMode = request.DistanceMode.Trim(),
             IsActive = true
         };
         _db.Routes.Add(route);
         await _db.SaveChangesAsync(ct);
-        await ReplaceStops(route.Id, request.StopIds, ct);
+        await ReplaceStops(route.Id, request, ct);
         await _geometry.RebuildAsync(route.Id, ct);
         await _tracking.Audit(User.Id(), "Create", "Route", route.Id.ToString(), route.Code, ct);
         return Ok(new { route.Id });
@@ -410,8 +821,9 @@ public class AdminController : ControllerBase
         route.Code = request.Code.Trim();
         route.Name = request.Name.Trim();
         route.OperatorId = request.OperatorId;
+        route.DistanceMode = request.DistanceMode.Trim();
         await _db.SaveChangesAsync(ct);
-        await ReplaceStops(route.Id, request.StopIds, ct);
+        await ReplaceStops(route.Id, request, ct);
         await _geometry.RebuildAsync(route.Id, ct);
         return Ok(new { route.Id });
     }
@@ -445,6 +857,71 @@ public class AdminController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("routes/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteRoutes([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No route IDs provided." });
+
+        var routes = await _db.Routes.Where(r => request.Ids.Contains(r.Id) && r.IsActive).ToListAsync(ct);
+        var hasSchedRouteIds = await _db.Schedules
+            .Where(s => request.Ids.Contains(s.RouteId) && s.IsActive)
+            .Select(s => s.RouteId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var hasSchedSet = hasSchedRouteIds.ToHashSet();
+        var deleted = 0;
+        var skipped = 0;
+        var reasons = new List<string>();
+
+        foreach (var r in routes)
+        {
+            if (hasSchedSet.Contains(r.Id))
+            {
+                skipped++;
+                reasons.Add($"Route '{r.Code}' ({r.Name}) still has active schedules.");
+                continue;
+            }
+            r.IsActive = false;
+            deleted++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Route", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
+        return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} route(s). {skipped} skipped.", reasons));
+    }
+
+    [HttpPost("routes/bulk-update")]
+    public async Task<IActionResult> BulkUpdateRoutes([FromBody] BulkUpdateRoutesRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No route IDs provided." });
+
+        var routes = await _db.Routes.Where(r => request.Ids.Contains(r.Id) && r.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var r in routes)
+        {
+            var modified = false;
+            if (request.OperatorId.HasValue && request.OperatorId.Value > 0)
+            {
+                r.OperatorId = request.OperatorId.Value;
+                modified = true;
+            }
+            if (!string.IsNullOrWhiteSpace(request.DistanceMode))
+            {
+                r.DistanceMode = request.DistanceMode.Trim();
+                modified = true;
+            }
+            if (modified) updated++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Route", string.Join(",", request.Ids), $"Updated {updated} routes", ct);
+        return Ok(new BulkOperationResult(updated, routes.Count - updated, $"Updated {updated} route(s)."));
+    }
+
     [HttpGet("schedules")]
     public async Task<IActionResult> Schedules(CancellationToken ct)
     {
@@ -475,7 +952,7 @@ public class AdminController : ControllerBase
     [HttpPost("schedules")]
     public async Task<IActionResult> CreateSchedule(ScheduleRequest request, CancellationToken ct)
     {
-        var error = await ValidateSchedule(request, ct);
+        var error = await ValidateSchedule(request, null, ct);
         if (error is not null) return BadRequest(new { message = error });
         var row = new Schedule
         {
@@ -497,7 +974,7 @@ public class AdminController : ControllerBase
     {
         var row = await _db.Schedules.FirstOrDefaultAsync(s => s.Id == id && s.IsActive, ct);
         if (row is null) return NotFound(new { message = "Schedule not found." });
-        var error = await ValidateSchedule(request, ct);
+        var error = await ValidateSchedule(request, id, ct);
         if (error is not null) return BadRequest(new { message = error });
         row.RouteId = request.RouteId;
         row.BusId = request.BusId;
@@ -520,6 +997,76 @@ public class AdminController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("schedules/bulk-delete")]
+    public async Task<IActionResult> BulkDeleteSchedules([FromBody] BulkDeleteRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No schedule IDs provided." });
+
+        var schedules = await _db.Schedules.Where(s => request.Ids.Contains(s.Id) && s.IsActive).ToListAsync(ct);
+        var runningScheduleIds = await _db.Trips
+            .Where(t => request.Ids.Contains(t.ScheduleId) && t.Status == "Running")
+            .Select(t => t.ScheduleId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var runningSet = runningScheduleIds.ToHashSet();
+        var deleted = 0;
+        var skipped = 0;
+        var reasons = new List<string>();
+
+        foreach (var s in schedules)
+        {
+            if (runningSet.Contains(s.Id))
+            {
+                skipped++;
+                reasons.Add($"Schedule #{s.Id} currently has a running trip in progress.");
+                continue;
+            }
+            s.IsActive = false;
+            deleted++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkDelete", "Schedule", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
+        return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} schedule(s). {skipped} skipped.", reasons));
+    }
+
+    [HttpPost("schedules/bulk-update")]
+    public async Task<IActionResult> BulkUpdateSchedules([FromBody] BulkUpdateSchedulesRequest request, CancellationToken ct)
+    {
+        if (request?.Ids == null || request.Ids.Count == 0)
+            return BadRequest(new { message = "No schedule IDs provided." });
+
+        var schedules = await _db.Schedules.Where(s => request.Ids.Contains(s.Id) && s.IsActive).ToListAsync(ct);
+        var updated = 0;
+
+        foreach (var s in schedules)
+        {
+            var modified = false;
+            if (!string.IsNullOrWhiteSpace(request.ServiceDays))
+            {
+                s.ServiceDays = request.ServiceDays.Trim();
+                modified = true;
+            }
+            if (request.BusId.HasValue)
+            {
+                s.BusId = request.BusId.Value > 0 ? request.BusId.Value : null;
+                modified = true;
+            }
+            if (request.DriverId.HasValue)
+            {
+                s.DriverId = request.DriverId.Value > 0 ? request.DriverId.Value : null;
+                modified = true;
+            }
+            if (modified) updated++;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "BulkUpdate", "Schedule", string.Join(",", request.Ids), $"Updated {updated} schedules", ct);
+        return Ok(new BulkOperationResult(updated, schedules.Count - updated, $"Updated {updated} schedule(s)."));
+    }
+
     [HttpGet("live")]
     public async Task<IActionResult> Live(CancellationToken ct) => Ok(await _tracking.LiveAsync(ct));
 
@@ -540,15 +1087,24 @@ public class AdminController : ControllerBase
         return Ok(rows.OrderBy(r => r.DepartureTime));
     }
 
-    private async Task ReplaceStops(int routeId, List<int> stopIds, CancellationToken ct)
+    private async Task ReplaceStops(int routeId, RouteRequest request, CancellationToken ct)
     {
         var old = await _db.RouteStops.Where(rs => rs.RouteId == routeId).ToListAsync(ct);
         _db.RouteStops.RemoveRange(old);
         await _db.SaveChangesAsync(ct);
         var seq = 1;
-        foreach (var stopId in stopIds)
+        for (var index = 0; index < request.StopIds.Count; index++)
         {
-            _db.RouteStops.Add(new RouteStop { RouteId = routeId, StopId = stopId, SequenceNo = seq++ });
+            var segmentDistance = request.DistanceMode == "Manual" && index > 0
+                ? decimal.Round((decimal)request.SegmentDistancesKm![index - 1], 2)
+                : (decimal?)null;
+            _db.RouteStops.Add(new RouteStop
+            {
+                RouteId = routeId,
+                StopId = request.StopIds[index],
+                SequenceNo = seq++,
+                SegmentDistanceKm = segmentDistance
+            });
         }
         await _db.SaveChangesAsync(ct);
     }
@@ -594,6 +1150,12 @@ public class AdminController : ControllerBase
         if (request.Name.Trim().Length < 2) return "Enter a route name.";
         if (request.StopIds.Count < 2) return "A route needs at least two stops.";
         if (request.StopIds.Distinct().Count() != request.StopIds.Count) return "Each stop can appear once.";
+        if (request.DistanceMode is not ("Auto" or "Manual")) return "Choose automatic or manual distance calculation.";
+        if (request.DistanceMode == "Manual"
+            && (request.SegmentDistancesKm is null
+                || request.SegmentDistancesKm.Count != request.StopIds.Count - 1
+                || request.SegmentDistancesKm.Any(distance => !double.IsFinite(distance) || distance < 0.01 || distance > 999999.99)))
+            return "Enter a valid distance of at least 0.01 km for every leg between stops.";
         var found = await _db.Stops.CountAsync(s => s.IsActive && request.StopIds.Contains(s.Id), ct);
         if (found != request.StopIds.Count) return "One of those stops is not available.";
         var code = request.Code.Trim();
@@ -602,20 +1164,92 @@ public class AdminController : ControllerBase
         return null;
     }
 
-    private async Task<string?> ValidateSchedule(ScheduleRequest request, CancellationToken ct)
+    private async Task<string?> ValidateSchedule(
+        ScheduleRequest request,
+        int? scheduleId,
+        CancellationToken ct)
     {
         if (!await _db.Routes.AnyAsync(r => r.Id == request.RouteId && r.IsActive, ct))
             return "Choose a route.";
-        if (!TimeOnly.TryParse(request.DepartureTime, out _))
+
+        if (!TimeOnly.TryParse(request.DepartureTime, out var departureTime))
             return "Enter a departure time like 08:00.";
-        if (request.BusId is int busId && !await _db.Buses.AnyAsync(b => b.Id == busId && b.IsActive, ct))
+
+        if (request.BusId is int busId &&
+            !await _db.Buses.AnyAsync(b => b.Id == busId && b.IsActive, ct))
+        {
             return "Choose a bus.";
-        if (request.DriverId is int driverId && !await _db.Drivers.AnyAsync(d => d.Id == driverId && d.IsActive, ct))
+        }
+
+        if (request.DriverId is int driverId &&
+            !await _db.Drivers.AnyAsync(d => d.Id == driverId && d.IsActive, ct))
+        {
             return "Choose a driver.";
-        var days = string.IsNullOrWhiteSpace(request.ServiceDays) ? "1111111" : request.ServiceDays.Trim();
+        }
+
+        var days = string.IsNullOrWhiteSpace(request.ServiceDays)
+            ? "1111111"
+            : request.ServiceDays.Trim();
+
         if (!Regex.IsMatch(days, "^[01]{7}$"))
             return "Service days must be 7 characters of 1 or 0, Monday through Sunday.";
+
+        var route = await _db.Routes
+            .AsNoTracking()
+            .FirstAsync(r => r.Id == request.RouteId, ct);
+
+        var routeMinutes = Math.Max(
+            30,
+            Geo.EtaMinutes((double)(route.DistanceKm ?? 0)));
+
+        var newStart = departureTime.ToTimeSpan();
+        var newEnd = newStart.Add(TimeSpan.FromMinutes(routeMinutes + 15));
+
+        var existingSchedules = await _db.Schedules
+            .AsNoTracking()
+            .Include(s => s.Route)
+            .Where(s =>
+                s.IsActive &&
+                s.Id != scheduleId &&
+                ((request.BusId != null && s.BusId == request.BusId) ||
+                 (request.DriverId != null && s.DriverId == request.DriverId)))
+            .ToListAsync(ct);
+
+        foreach (var existing in existingSchedules)
+        {
+            if (!ServiceDaysOverlap(days, existing.ServiceDays))
+                continue;
+
+            var existingDurationMinutes = Math.Max(
+                30,
+                Geo.EtaMinutes((double)(existing.Route.DistanceKm ?? 0)));
+
+            var existingStart = existing.DepartureTime.ToTimeSpan();
+            var existingEnd = existingStart.Add(
+                TimeSpan.FromMinutes(existingDurationMinutes + 15));
+
+            if (newStart < existingEnd && existingStart < newEnd)
+            {
+                return "The selected bus or driver already has an overlapping schedule. " +
+                       "Use a different departure time.";
+            }
+        }
+
         return null;
+    }
+
+    private static bool ServiceDaysOverlap(string first, string second)
+    {
+        if (first.Length != 7 || second.Length != 7)
+            return true;
+
+        for (var i = 0; i < 7; i++)
+        {
+            if (first[i] == '1' && second[i] == '1')
+                return true;
+        }
+
+        return false;
     }
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
