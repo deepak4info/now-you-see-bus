@@ -23,11 +23,23 @@ public static class DbInitializer
         var geometry = scope.ServiceProvider.GetRequiredService<RouteGeometryService>();
 
         var dir = FindDatabaseDir();
-        await using (var conn = new SqlConnection(connectionString))
+        if (Directory.Exists(dir))
         {
-            await OpenWithRetry(conn, logger);
-            await ExecuteScript(conn, Path.Combine(dir, "001_schema.sql"));
-            await ExecuteScript(conn, Path.Combine(dir, "002_seed.sql"));
+            try
+            {
+                await using (var conn = new SqlConnection(connectionString))
+                {
+                    await OpenWithRetry(conn, logger);
+                    var schemaPath = Path.Combine(dir, "001_schema.sql");
+                    var seedPath = Path.Combine(dir, "002_seed.sql");
+                    if (File.Exists(schemaPath)) await ExecuteScript(conn, schemaPath);
+                    if (File.Exists(seedPath)) await ExecuteScript(conn, seedPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("Schema script initialization skipped: {Message}", ex.Message);
+            }
         }
 
         await SeedAccountsAsync(db, passwords);
@@ -52,15 +64,24 @@ public static class DbInitializer
 
     private static async Task EnsureDatabaseAsync(string connectionString, ILogger logger)
     {
-        var builder = new SqlConnectionStringBuilder(connectionString);
-        var dbName = builder.InitialCatalog;
-        if (!Regex.IsMatch(dbName, "^[A-Za-z0-9_]+$"))
-            throw new InvalidOperationException("Database name is not valid.");
-        builder.InitialCatalog = "master";
-        await using var conn = new SqlConnection(builder.ConnectionString);
-        await OpenWithRetry(conn, logger);
-        await using var cmd = new SqlCommand($"IF DB_ID(N'{dbName}') IS NULL CREATE DATABASE [{dbName}]", conn);
-        await cmd.ExecuteNonQueryAsync();
+        try
+        {
+            var builder = new SqlConnectionStringBuilder(connectionString);
+            var dbName = builder.InitialCatalog;
+            if (string.IsNullOrWhiteSpace(dbName) || !Regex.IsMatch(dbName, "^[A-Za-z0-9_]+$"))
+                return;
+            builder.InitialCatalog = "master";
+            await using var conn = new SqlConnection(builder.ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new SqlCommand($"IF DB_ID(N'{dbName}') IS NULL CREATE DATABASE [{dbName}]", conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            // On cloud and shared hosting (e.g. SmarterASP.NET, Azure SQL), database is already provisioned
+            // and connecting to master is not permitted. Safely skip and proceed.
+            logger.LogInformation("Skipping master database check (cloud/shared database host): {Message}", ex.Message);
+        }
     }
 
     private static async Task OpenWithRetry(SqlConnection conn, ILogger logger)
