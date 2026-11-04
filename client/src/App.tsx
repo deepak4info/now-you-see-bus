@@ -15,6 +15,7 @@ import { DriverPage } from "@/pages/Driver";
 import { AdminShell } from "@/pages/admin/AdminShell";
 import { BulkUploadPage } from "@/pages/admin/BulkUpload";
 import { OverviewPage } from "@/pages/admin/Overview";
+import { WorkflowsPage } from "@/pages/admin/Workflows";
 import { BusesPage, DriversPage, LivePage, OperatorsPage, ReportsPage, RoutesPage, SchedulesPage, StopsPage } from "@/pages/admin/DataPages";
 
 function Guard({ roles, children }: { roles?: string[]; children: ReactNode }) {
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="schedules" element={<SchedulesPage />} />
         <Route path="live" element={<LivePage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="workflows" element={<WorkflowsPage />} />
       </Route>
       <Route element={<Shell><Outlet /></Shell>}>
         <Route index element={<HomePage />} />

@@ -14,6 +14,7 @@ const items = [
   ["schedules", "Schedules"],
   ["live", "Live board"],
   ["reports", "Reports"],
+  ["workflows", "System Flows"],
 ] as const;
 
 export function AdminShell() {

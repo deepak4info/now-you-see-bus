@@ -39,29 +39,45 @@ An enterprise-grade, real-time bus tracking and transport operations platform de
 - **Database**: Microsoft SQL Server (2019/2022 / Azure SQL) with spatial coordinates, normalized schema, transactional triggers, and audit logging.
 - **Geographic Services**: Integration with Project OSRM (Open Source Routing Machine) to rebuild highway-aligned route geometries, calculate Haversine distances, project real-time GPS locations onto road segments, and estimate arrival times at road speed (42 km/h).
 
+```mermaid
+flowchart TD
+    subgraph Clients["Frontend Clients"]
+        P["Passenger Web (React + Leaflet)"]
+        D["Driver Console (Mobile Web)"]
+        A["Dispatch Admin Dashboard"]
+    end
+
+    subgraph Gateway["API Gateway & Security"]
+        RL["Rate Limiter (10 req/min)"]
+        SEC["Security Headers & CORS"]
+        JWT["JWT Auth & Invalidation Hook"]
+    end
+
+    subgraph Backend["ASP.NET Core 8 Web API"]
+        CTRL["REST Controllers (Search, Admin, Driver)"]
+        HUB["SignalR Hub (/hubs/tracking)"]
+        GEO["Geometry & Stop Normalizer Service"]
+    end
+
+    subgraph Storage["Data & External Services"]
+        SQL[("SQL Server (db_ad0bfd_busdb)")]
+        OSRM["Project OSRM Routing Engine"]
+    end
+
+    P -->|HTTPS REST| SEC
+    D -->|GPS Telemetry POST| SEC
+    A -->|Admin Operations| SEC
+
+    SEC --> RL --> JWT --> CTRL
+    P <-->|WebSockets (Live GPS)| HUB
+    CTRL <--> HUB
+    CTRL --> GEO
+    GEO <--> OSRM
+    CTRL <--> SQL
 ```
- ┌──────────────────────┐      ┌────────────────────────┐      ┌──────────────────────┐
- │  Passenger Web UI    │      │   Driver Mobile Web    │      │  Dispatch Admin Web  │
- └──────────┬───────────┘      └───────────┬────────────┘      └──────────┬───────────┘
-            │                              │                              │
-            │ REST / SignalR               │ REST (GPS Telemetry)         │ REST
-            ▼                              ▼                              ▼
- ┌────────────────────────────────────────────────────────────────────────────────────┐
- │                            ASP.NET Core 8.0 Web API                                │
- │  ┌──────────────────────────────────────────────────────────────────────────────┐  │
- │  │ Security: JWT Auth | Rate Limiter | CORS | Security Headers | Sanitizer      │  │
- │  ├──────────────────────────────┬───────────────────────────────┬───────────────┤  │
- │  │ Controllers (Auth, Admin,    │ Services (Tracking, Geometry, │ SignalR Hub   │  │
- │  │ Driver, Passenger, Upload)   │ StopNormalizer, Geo, OSRM)    │ (/hubs/track) │  │
- │  └──────────────────────────────┴───────────────────────────────┴───────────────┘  │
- └─────────────────────────────┬──────────────────────────┬───────────────────────────┘
-                               │                          │
-                               ▼                          ▼
-               ┌──────────────────────────────┐    ┌───────────────────────────┐
-               │ Microsoft SQL Server DB      │    │ Project OSRM Routing API  │
-               │ (Schema, Seeds, Audit, GPS)  │    │ (Highway Road Geometries) │
-               └──────────────────────────────┘    └───────────────────────────┘
-```
+
+> [!TIP]
+> **Complete Operational & Security Flowcharts:** For detailed sequence and state flowcharts covering Passenger Search, Driver GPS Telemetry, Daily Schedule Materialization, CSV Bulk Import, and Authentication Middleware, refer to [ARCHITECTURE.md](file:///mnt/c/Users/deepa/OneDrive/Desktop/whereismybus/bus-track/bus-track/ARCHITECTURE.md).
 
 ---
 
