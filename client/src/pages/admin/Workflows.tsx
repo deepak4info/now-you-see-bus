@@ -332,6 +332,63 @@ const workflows: Workflow[] = [
     JWT --> ActiveDB["OnTokenValidated: User.IsActive == true?"]
     ActiveDB -- "Inactive" --> Err["Reject Token (401)"]
     ActiveDB -- "Active" --> Role["Enforce Role (Admin / Driver / Passenger)"]`
+  },
+  {
+    id: "telemetry",
+    title: "7. EU TELEMETRY IoT Defense Framework",
+    shortDesc: "Automated cybersecurity testing, GNSS spoofing detection, and IoT device trust scoring conforming to telemetry-project.eu.",
+    icon: Radio,
+    steps: [
+      {
+        number: "01",
+        actor: "IoT Hardware",
+        action: "Send Telemetry Packet",
+        detail: "OBU or GPS tracker sends DeviceUid, fleetNumber, lat, lon, speed, heading, satellites, and HDOP to /api/telemetry/ingest.",
+        status: "JSON / REST"
+      },
+      {
+        number: "02",
+        actor: "Timestamp Shield",
+        action: "Clock Skew & Replay Defense",
+        detail: "Rejects expired packets (> 24 hr) or future time jumps (> 3 min) to thwart replay or desync attacks.",
+        status: "Time Guard"
+      },
+      {
+        number: "03",
+        actor: "Kinematic Engine",
+        action: "Anti-Spoofing & Teleport Barrier",
+        detail: "Verifies Haversine distance and implied velocity (< 130 km/h). Flags teleportation jumps and velocity mismatches.",
+        status: "Kinematics"
+      },
+      {
+        number: "04",
+        actor: "Trust Engine",
+        action: "Dynamic Trust Scoring & Quarantine",
+        detail: "Maintains rolling trust score [0.0..1.0]. Severe anomalies trigger immediate quarantine (< 0.35 threshold).",
+        status: "Trust Shield"
+      },
+      {
+        number: "05",
+        actor: "Transit Stream",
+        action: "Live Hub Sync & Audit Log",
+        detail: "Valid packets update live trip and stream to passenger maps. Anomalies persist to SQL Server AuditLogs.",
+        status: "Live Sync"
+      }
+    ],
+    mermaid: `flowchart TD
+    OBU["IoT OBU / GPS Tracker (/api/telemetry/ingest)"] --> CHK["TELEMETRY Anomaly Engine"]
+    CHK --> SPEED{"Implied Speed > 130 km/h or Jump > 3 km?"}
+    CHK --> SKEW{"Clock Skew > 3 min or Replay?"}
+    CHK --> GNSS{"Satellites < 4 or HDOP > 8?"}
+    SPEED -- "Yes" --> PEN["Apply Trust Penalty (-0.40)"]
+    SKEW -- "Yes" --> PEN
+    GNSS -- "Yes" --> PEN
+    SPEED -- "No" --> HEAL["Gradual Trust Boost (+0.05)"]
+    PEN --> QUAR{"Trust Score < 0.35?"}
+    QUAR -- "Quarantined" --> DROP["Isolate Device & AuditLog Alert"]
+    QUAR -- "Trusted" --> TRACK["Sync Live Trip (TrackingService)"]
+    HEAL --> TRACK
+    TRACK --> HUB["SignalR WebSocket (Live Map)"]`
   }
 ];
 

@@ -12,6 +12,7 @@ This document outlines the end-to-end architecture, runtime communication channe
 4. [Dispatch Operations & Schedule Materialization Flow](#4-dispatch-operations--schedule-materialization-flow)
 5. [Bulk Schedule CSV Upload & Validation Flow](#5-bulk-schedule-csv-upload--validation-flow)
 6. [Authentication & Security Middleware Flow](#6-authentication--security-middleware-flow)
+7. [EU Horizon TELEMETRY IoT Defense Framework](#7-eu-horizon-telemetry-iot-defense-framework)
 
 ---
 
@@ -214,3 +215,36 @@ flowchart TD
     CheckRole -- "No" --> Err403["Return 403 Forbidden"]
     CheckRole -- "Yes" --> ExecuteController
 ```
+
+---
+
+## 7. EU Horizon TELEMETRY IoT Defense Framework
+
+The platform integrates the cybersecurity methodologies of the **EU Horizon TELEMETRY Project** ([telemetry-project.eu](https://telemetry-project.eu/)) for automated security testing and anomaly detection of IoT telematics devices (On-Board Units / GPS trackers).
+
+### Multi-Layer Anomaly Detection:
+1. **Kinematic & Velocity Verification**: Computes implied velocity between consecutive pings using the Haversine formula over elapsed time. Flags `SPOOFING_IMPOSSIBLE_SPEED` if velocity exceeds 130 km/h or `SPOOFING_TELEPORTATION_JUMP` if spatial displacement exceeds 3 km in under 10 seconds.
+2. **Clock Skew & Replay Defense**: Rejects packets with timestamps > 3 minutes in the future (`FUTURE_TIMESTAMP_DRIFT`) or older than 24 hours (`EXPIRED_OR_REPLAY_TIMESTAMP`) to thwart GNSS spoofing and replay attacks.
+3. **GNSS Signal Quality Checks**: Assesses receiver metrics; flags `LOW_SATELLITE_COUNT` (< 4 satellites) or `DEGRADED_HDOP_ACCURACY` (HDOP > 8.0).
+4. **Dynamic Trust Score Model**: Maintains a rolling trust score `[0.0, 1.0]` per device. Clean packets restore trust (+0.05). Anomalies apply graded penalties (-0.10 to -0.40). Devices falling below the quarantine threshold (< 0.35) are isolated from passenger live maps.
+5. **Real-time Incident Logging**: Automatically writes detected anomalies with payload coordinates and trust metrics into SQL Server `AuditLogs`.
+
+```mermaid
+flowchart TD
+    OBU["IoT OBU / GPS Tracker (/api/telemetry/ingest)"] --> CHK["TELEMETRY Anomaly Engine"]
+    CHK --> SPEED{"Implied Speed > 130 km/h or Jump > 3 km?"}
+    CHK --> SKEW{"Clock Skew > 3 min or Replay?"}
+    CHK --> GNSS{"Satellites < 4 or HDOP > 8?"}
+    
+    SPEED -- "Yes" --> PEN["Apply Trust Penalty (-0.40)"]
+    SKEW -- "Yes" --> PEN
+    GNSS -- "Yes" --> PEN
+    SPEED -- "No" --> HEAL["Gradual Trust Boost (+0.05)"]
+    
+    PEN --> QUAR{"Trust Score < 0.35?"}
+    QUAR -- "Quarantined" --> DROP["Isolate Device & AuditLog Alert"]
+    QUAR -- "Trusted" --> TRACK["Sync Live Trip (TrackingService)"]
+    HEAL --> TRACK
+    TRACK --> HUB["SignalR WebSocket (Live Passenger Map)"]
+```
+

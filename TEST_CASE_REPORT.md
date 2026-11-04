@@ -2,21 +2,22 @@
 
 **Project:** Where Is My Bus (BusTrack Platform)  
 **Last Updated:** November 2026  
-**Status:** Security Hardened & Automated Tests Passed (48/48)  
+**Status:** Security Hardened & Automated Tests Passed (58/58)  
 **Execution Environment:** .NET 8.0 SDK (Release Configuration)
 
 ---
 
 ## Executive Summary
 
-A comprehensive security audit and test case implementation was conducted on the Where Is My Bus platform. Key security vulnerabilities, data integrity gaps, and unvalidated edge cases identified in earlier reviews have been remediated, hardened, and verified with automated unit and integration tests.
+A comprehensive security audit and test case implementation was conducted on the Where Is My Bus platform. Key security vulnerabilities, data integrity gaps, and unvalidated edge cases identified in earlier reviews have been remediated, hardened, and verified with automated unit and integration tests, including integration with the EU Horizon TELEMETRY IoT cybersecurity framework (telemetry-project.eu).
 
 | Metric | Status |
 |---|---|
 | **API Compilation (Release)** | Passed (0 Warnings, 0 Errors) |
 | **Client UI Validation** | Form validation & email regex enforced |
 | **Security Controls** | Rate Limiting, CORS Restrictions, Security Headers, CSV Sanitization active |
-| **Automated Test Suite** | **48 Passed**, 0 Failed, 0 Skipped |
+| **IoT Cybersecurity** | EU TELEMETRY Kinematic Spoofing & Replay Defense active |
+| **Automated Test Suite** | **58 Passed**, 0 Failed, 0 Skipped |
 | **Production Readiness** | Complete |
 
 ---
@@ -29,6 +30,7 @@ A comprehensive security audit and test case implementation was conducted on the
 | **F-02** | No login throttling or lockout was present in the authentication flow. | ADM-LOGIN-007 | Configured ASP.NET Core `AddRateLimiter` with fixed-window partition (`auth-limit`) enforcing request caps on `/api/auth/login` and `/api/auth/register`. | **Resolved** |
 | **F-03** | Deactivated accounts could still use 12-hour JWT tokens until natural expiration. | ADM-LOGIN-006, ADM-SEC-002, ADM-USER-004 | Added `OnTokenValidated` hook in `JwtBearerOptions` that checks `user.IsActive` in the database for each authenticated request. Deactivated users are immediately rejected. | **Resolved** |
 | **F-04** | Driver creation and update checked duplicate email/driver ID, but did not enforce driving licence number uniqueness. | ADM-DRIVER-002 | Added unique licence number validation in `AdminController.CreateDriver` and `AdminController.UpdateDriver`. | **Resolved** |
+| **F-05** | IoT hardware GPS units lacked spoofing protection and replay defense. | TEL-SEC-001–010 | Integrated EU Horizon TELEMETRY framework (`telemetry-project.eu`) with kinematic velocity barriers (> 130 km/h), clock skew shields (> 3 min), and automated device quarantine. | **Resolved** |
 | **SEC-01** | Development wildcard CORS allowed all origins (`*`) in production. | ADM-SEC-001 | Restricted CORS in production to explicit origins configured in `Cors:AllowedOrigins` (e.g. `https://whereismybus.local`). | **Resolved** |
 | **SEC-02** | Missing HTTP security headers exposed clients to clickjacking and MIME-sniffing. | ADM-SEC-003 | Middleware now injects `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection: 1; mode=block`, and HSTS. | **Resolved** |
 | **SEC-03** | Bulk CSV upload allowed formula injection (`=,+,-,@`). | ADM-SEC-003 | Added `BulkUploadController.SanitizeCsvCell` to neutralize spreadsheet formulas prior to processing or storing. | **Resolved** |
@@ -38,7 +40,7 @@ A comprehensive security audit and test case implementation was conducted on the
 
 ## Automated Test Suite Inventory (`tests/BusTrack.Api.Tests`)
 
-An automated xUnit test suite has been implemented in `tests/BusTrack.Api.Tests` containing **48 automated tests**:
+An automated xUnit test suite has been implemented in `tests/BusTrack.Api.Tests` containing **58 automated tests**:
 
 ### 1. Security & Authentication (`AuthAndSecurityTests.cs`)
 - `JwtIssuer_GeneratesValidToken_WithAllUserClaims` (Passed)
@@ -72,6 +74,18 @@ An automated xUnit test suite has been implemented in `tests/BusTrack.Api.Tests`
 - `Route_RequiresAtLeastTwoStops` (Passed)
 - `Route_RejectsDuplicateStopsInSequence` (Passed)
 
+### 5. EU Horizon TELEMETRY IoT Security Framework (`TelemetryServiceTests.cs`)
+- `IngestPacket_ValidCoordinatesAndSignal_AcceptedWithTrustedStatus` (Passed)
+- `IngestPacket_InvalidCoordinates_FlagsAnomalyAndReducesTrust` (Passed)
+- `IngestPacket_NullIslandCoordinates_FlagsNullIslandSpoofing` (Passed)
+- `IngestPacket_FutureTimestampDrift_FlagsClockSkew` (Passed)
+- `IngestPacket_ExpiredTimestamp_FlagsReplayAttack` (Passed)
+- `IngestPacket_LowSatellitesAndHighHdop_FlagsDegradedQuality` (Passed)
+- `IngestPacket_KinematicSpeedJump_FlagsImpossibleSpeedAndTeleportation` (Passed)
+- `IngestPacket_RepeatedSevereAnomalies_QuarantinesDevice` (Passed)
+- `ResetDeviceTrust_RestoresTrustScoreToOne` (Passed)
+- `GetStats_ComputesAggregatesCorrectly` (Passed)
+
 ---
 
 ## Test Execution Command & Evidence
@@ -88,7 +102,7 @@ VSTest version 17.11.1 (x64)
 Starting test execution, please wait...
 A total of 1 test files matched the specified pattern.
 
-Passed!  - Failed: 0, Passed: 48, Skipped: 0, Total: 48, Duration: 1 s - BusTrack.Api.Tests.dll (net8.0)
+Passed!  - Failed: 0, Passed: 58, Skipped: 0, Total: 58, Duration: 972 ms - BusTrack.Api.Tests.dll (net8.0)
 ```
 
 ---

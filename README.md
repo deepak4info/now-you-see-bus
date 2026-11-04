@@ -12,6 +12,7 @@ An enterprise-grade, real-time bus tracking and transport operations platform de
    - [Driver Operations Portal](#2-driver-operations-portal)
    - [Dispatch & Fleet Management](#3-dispatch--fleet-management)
    - [Core Real-Time & Routing Engine](#4-core-real-time--routing-engine)
+   - [EU Horizon TELEMETRY IoT Defense Framework](#5-eu-horizon-telemetry-iot-defense-framework)
 3. [Where It Can Be Used (Target Use Cases)](#where-it-can-be-used-target-use-cases)
 4. [System Requirements & Prerequisites](#system-requirements--prerequisites)
    - [Hardware & Network](#hardware--network-specifications)
@@ -129,6 +130,23 @@ flowchart TD
 - **Projection & Map Matching**: Projects GPS points to the nearest polyline segment to calculate precise distance along the route.
 - **Stop Normalizer**: Phonetic Romanization matching (`Hissar` → `Hisar`, `Dhanger` → `Dhangar`) and transit suffix stripping (`Bus Stand`, `ISBT`, `Chowk`, `Bypass`) to prevent duplicate stop records.
 
+### 5. EU Horizon TELEMETRY IoT Defense Framework
+Conforming to the EU Horizon Europe **TELEMETRY Project** ([telemetry-project.eu](https://telemetry-project.eu/)) for automated security testing and telematics anomaly detection:
+- **Hardware Telematics Ingestion (`POST /api/telemetry/ingest`)**: Secure gateway accepting hardware telematics streams from on-board units (OBUs) and GPS trackers (e.g., Teltonika, Queclink, OBD-II/CAN bus units).
+- **Automated Cybersecurity Anomaly Engine**:
+  - **GPS Spoofing & Teleportation Defense**: Detects mathematically impossible speeds (> 130 km/h) or coordinate leaps (> 3 km in under 10s) using Haversine kinematic delta analysis.
+  - **Clock Skew & Replay Shield**: Enforces strict timestamp bounds (rejects > 3 min future drift or > 24 hr expired packets) to thwart replay attacks.
+  - **GNSS Quality & Coordinate Sanitization**: Eliminates out-of-bounds coordinates and (0, 0) Null Island anomalies; flags degraded HDOP (> 8.0) or low satellite count (< 4).
+  - **Sensor Consistency Check**: Identifies conflicting sensor reports (e.g., stationary speed reporting while position moves rapidly).
+- **Dynamic Device Trust Scoring & Quarantine**:
+  - Tracks rolling trust score `[0.0, 1.0]` per device.
+  - Automatically isolates and quarantines devices with trust scores below `0.35`, shielding passenger live maps from fraudulent route diversion.
+- **Admin Observability & Recalibration**:
+  - `GET /api/telemetry/devices`: Real-time inventory of connected devices, trust states, and packet metrics.
+  - `GET /api/telemetry/anomalies`: Live cybersecurity incident feed.
+  - `GET /api/telemetry/stats`: Fleet-wide telematics health and quarantine rates.
+  - `POST /api/telemetry/devices/{deviceUid}/reset-trust`: Dispatcher/admin trust restoration following physical inspection.
+
 ---
 
 ## Where It Can Be Used (Target Use Cases)
@@ -181,13 +199,14 @@ The following security controls have been audited and hardened across the platfo
 | **HTTP Security Headers** | Clickjacking, MIME-sniffing, XSS | Middleware injects `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection: 1; mode=block`, `Content-Security-Policy`, and `Strict-Transport-Security` (HSTS). |
 | **Data Input & CSV Injection** | Formula execution (`=cmd`, `@SUM`) | Neutralizes spreadsheet formulas in bulk CSV uploads by sanitizing cells starting with `=`, `@`, `+`, or non-numeric `-`. |
 | **Data Integrity & Validation** | Duplicate licence numbers, overlapping schedules | Unique constraint checks for driver licences (`LicenseNumber`), duplicate bus registrations, valid route stop sequences, and server-side schedule collision detection. |
+| **IoT Device & Telematics** | GPS spoofing, replay attacks, coordinate tampering | EU Horizon TELEMETRY framework: kinematic speed checking (> 130 km/h), clock skew protection, dynamic trust scoring, and automatic device quarantine. |
 | **API Disclosure** | Public endpoint exposure | Swagger UI automatically restricted to Development environment (`app.Environment.IsDevelopment()`). |
 
 ---
 
 ## Automated Testing
 
-An automated xUnit test suite is included in `tests/BusTrack.Api.Tests` covering security, domain algorithms, phonetic normalizers, and business validation rules.
+An automated xUnit test suite (58 passing tests) is included in `tests/BusTrack.Api.Tests` covering security, domain algorithms, phonetic normalizers, business validation rules, and IoT telemetry anomaly detection.
 
 ### Running the Test Suite:
 
@@ -196,6 +215,15 @@ dotnet test tests/BusTrack.Api.Tests/BusTrack.Api.Tests.csproj -c Release
 ```
 
 ### Test Suite Highlights:
+- **`TelemetryServiceTests` (EU Horizon TELEMETRY Framework)**:
+  - Ingestion acceptance with initial `1.0` trust score and "Trusted" status.
+  - Invalid coordinate rejection and (0,0) Null Island spoofing detection.
+  - Clock skew drift detection (> 3 min future) and replay attack rejection (> 24 hr expired).
+  - Degraded GNSS signal quality detection (satellites < 4, HDOP > 8.0).
+  - Kinematic teleportation and impossible speed spoofing detection (> 130 km/h).
+  - Automated device quarantine enforcement when trust score falls below 0.35.
+  - Trust score recalibration and reset actions.
+  - Cross-device telemetry statistics aggregation.
 - **`AuthAndSecurityTests`**:
   - JWT token generation, claims verification (`NameIdentifier`, `Role`, `Email`, `driver_code`), and lifetime checks.
   - Cryptographic token signature verification and rejection of forged tokens.

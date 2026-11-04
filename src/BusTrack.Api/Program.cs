@@ -24,6 +24,8 @@ builder.Services.AddHttpClient<RoadRouter>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("WhereIsMyBus/1.0 (local depot)");
 });
 builder.Services.AddScoped<RouteGeometryService>();
+builder.Services.AddSingleton<TelemetryStateStore>();
+builder.Services.AddScoped<TelemetryService>();
 builder.Services.AddSingleton<PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtIssuer>();
 builder.Services.AddHostedService<TripSimulator>();

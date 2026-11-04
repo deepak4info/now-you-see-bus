@@ -122,3 +122,65 @@ public record BulkUpdateOperatorsRequest(List<int> Ids, string? ContactName, str
 public record BulkUpdateRoutesRequest(List<int> Ids, int? OperatorId, string? DistanceMode);
 public record BulkUpdateSchedulesRequest(List<int> Ids, string? ServiceDays, int? BusId, int? DriverId);
 public record BulkOperationResult(int SuccessCount, int SkippedCount, string Message, List<string>? Errors = null);
+
+// EU TELEMETRY (telemetry-project.eu) IoT Telematics Framework
+public record IoTTelemetryPacket(
+    string DeviceUid,
+    string FleetNumber,
+    double Latitude,
+    double Longitude,
+    double? SpeedKmph = null,
+    double? Heading = null,
+    double? AltitudeMeters = null,
+    int? Satellites = null,
+    double? Hdop = null,
+    double? BatteryLevel = null,
+    DateTime? RecordedAt = null,
+    string? ApiKey = null
+);
+
+public record TelemetryIngestResult(
+    bool Accepted,
+    string Message,
+    bool AnomalyDetected,
+    List<string> AnomalyFlags,
+    double TrustScore,
+    DateTime ProcessedAt,
+    TrackSnapshotDto? Snapshot = null
+);
+
+public record TelemetryDeviceStatus(
+    string DeviceUid,
+    string FleetNumber,
+    string Status,
+    double TrustScore,
+    DateTime LastSeen,
+    double Latitude,
+    double Longitude,
+    double? SpeedKmph,
+    int TotalPacketsReceived,
+    int TotalAnomaliesDetected,
+    List<string> RecentAnomalies
+);
+
+public record TelemetryAnomalyRecord(
+    string DeviceUid,
+    string FleetNumber,
+    List<string> AnomalyFlags,
+    double Latitude,
+    double Longitude,
+    double? ImpliedSpeedKmph,
+    double TrustScoreAfter,
+    DateTime Timestamp
+);
+
+public record TelemetryStatsDto(
+    int TotalPacketsReceived,
+    int TotalAnomaliesDetected,
+    int ActiveDevicesCount,
+    int QuarantinedDevicesCount,
+    double AverageTrustScore
+);
+
+public record ResetDeviceTrustRequest(string DeviceUid);
+
