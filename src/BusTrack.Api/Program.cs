@@ -186,7 +186,7 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
     if (!app.Environment.IsDevelopment())
     {
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none';");
+        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' wss: ws: https:; frame-ancestors 'none';");
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
     await next();
@@ -200,13 +200,16 @@ app.UseSwaggerUI(c =>
 });
 
 app.UseCors();
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<TrackingHub>("/hubs/tracking");
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/api", () => Results.Ok(new
 {
     service = "Where Is My Bus API (Haryana Transit)",
     status = "Online",
@@ -227,5 +230,7 @@ app.MapGet("/api/health", async (AppDbContext db) =>
         operationsLive = string.Equals(ops?.Value, "true", StringComparison.OrdinalIgnoreCase)
     });
 });
+
+app.MapFallbackToFile("index.html");
 
 app.Run();
