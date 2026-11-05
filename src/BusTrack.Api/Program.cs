@@ -80,26 +80,23 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        if (allowedOrigins.Length > 0)
+        policy.SetIsOriginAllowed(origin =>
         {
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
-        else if (builder.Environment.IsDevelopment())
-        {
-            policy.AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowAnyOrigin();
-        }
-        else
-        {
-            policy.WithOrigins("http://localhost:4317", "https://whereismybus.local")
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        }
+            if (string.IsNullOrWhiteSpace(origin)) return false;
+            if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+            {
+                return uri.Host == "localhost" ||
+                       uri.Host == "127.0.0.1" ||
+                       uri.Host.EndsWith("itempurl.com", StringComparison.OrdinalIgnoreCase) ||
+                       uri.Host.EndsWith("site4now.net", StringComparison.OrdinalIgnoreCase) ||
+                       uri.Host.Contains("whereismybus", StringComparison.OrdinalIgnoreCase) ||
+                       allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase);
+            }
+            return false;
+        })
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
     });
 });
 

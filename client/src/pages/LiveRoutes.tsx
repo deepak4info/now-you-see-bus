@@ -6,7 +6,7 @@ import { MapView, type BusPin } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNotice";
 import { Button } from "@/components/ui/button";
-import { useQuery } from "@/lib/api";
+import { resolveUrl, useQuery } from "@/lib/api";
 import { formatEta, getIndiaDate } from "@/lib/format";
 import type { PublicRoute, TrackSnapshot } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -25,7 +25,7 @@ export function LiveRoutesPage() {
 
   useEffect(() => {
     let active = true;
-    const conn = new HubConnectionBuilder().withUrl("/hubs/tracking").withAutomaticReconnect().build();
+    const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (snapshot: TrackSnapshot) => {
       setLiveBuses((current) => {
         const index = current.findIndex(

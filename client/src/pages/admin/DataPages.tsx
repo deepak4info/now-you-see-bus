@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, useQuery } from "@/lib/api";
+import { api, resolveUrl, useQuery } from "@/lib/api";
 import { formatClock, formatEta } from "@/lib/format";
 import type { TrackSnapshot } from "@/lib/types";
 import { HubConnectionBuilder } from "@microsoft/signalr";
@@ -2027,7 +2027,7 @@ export function LivePage() {
   useEffect(() => { if (query.data) setRows(query.data); }, [query.data]);
   useEffect(() => {
     let active = true;
-    const conn = new HubConnectionBuilder().withUrl("/hubs/tracking").withAutomaticReconnect().build();
+    const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (snap: TrackSnapshot) => {
       setRows((prev) => {
         const index = prev.findIndex((row) => row.fleetNumber === snap.fleetNumber);

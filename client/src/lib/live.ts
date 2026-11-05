@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { HubConnectionBuilder } from "@microsoft/signalr";
+import { resolveUrl } from "@/lib/api";
 import type { TrackSnapshot } from "@/lib/types";
 
 function mergeLeg(previous: TrackSnapshot | null, next: TrackSnapshot): TrackSnapshot {
@@ -32,7 +33,7 @@ export function useBusLive(
   useEffect(() => {
     if (!fleet || !subscribeToLive) return;
     let active = true;
-    const conn = new HubConnectionBuilder().withUrl("/hubs/tracking").withAutomaticReconnect().build();
+    const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (payload: TrackSnapshot) => {
       if (
         payload.fleetNumber === fleet

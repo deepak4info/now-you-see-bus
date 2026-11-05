@@ -2,6 +2,28 @@ import { useCallback, useEffect, useState } from "react";
 
 const TOKEN_KEY = "wimb_token";
 
+function normalizeBaseUrl(url?: string): string {
+  if (!url) return "";
+  return url.replace(/\/swagger(?:\/.*)?$/i, "").replace(/\/+$/, "");
+}
+
+export const API_BASE_URL = normalizeBaseUrl(
+  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) ||
+  "https://fatehabad4info-001-site1.itempurl.com"
+);
+
+export function resolveUrl(path: string): string {
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  if (typeof window !== "undefined" && window.location.origin === API_BASE_URL) {
+    return cleanPath;
+  }
+  return `${API_BASE_URL}${cleanPath}`;
+}
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -24,7 +46,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(path, { ...options, headers });
+  const url = resolveUrl(path);
+  const res = await fetch(url, { ...options, headers });
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   const data = text ? safeJson(text) : null;
@@ -32,7 +55,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     const message = (data && typeof data === "object" && "message" in data && typeof data.message === "string")
       ? data.message
       : res.statusText || "Request failed";
-    if (res.status === 401 && token && !path.startsWith("/api/auth/login")) {
+    if (res.status === 401 && token && !path.includes("/api/auth/login")) {
       setToken(null);
     }
     throw new ApiError(message, res.status);

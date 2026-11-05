@@ -11,8 +11,17 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 4317,
     proxy: {
-      "/api": { target: "http://127.0.0.1:5088", changeOrigin: true },
-      "/hubs": { target: "http://127.0.0.1:5088", ws: true, changeOrigin: true },
+      "/api": {
+        target: process.env.VITE_API_BASE_URL || "https://fatehabad4info-001-site1.itempurl.com",
+        changeOrigin: true,
+        secure: false,
+      },
+      "/hubs": {
+        target: process.env.VITE_API_BASE_URL || "https://fatehabad4info-001-site1.itempurl.com",
+        ws: true,
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 });

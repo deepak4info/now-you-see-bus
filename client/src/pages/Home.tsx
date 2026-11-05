@@ -6,7 +6,7 @@ import { MapView, type BusPin } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNotice";
 import { Button } from "@/components/ui/button";
-import { useQuery } from "@/lib/api";
+import { resolveUrl, useQuery } from "@/lib/api";
 import { ago, formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly } from "@/lib/format";
 import { useBusLive } from "@/lib/live";
 import { getRecentSearch, saveRecentSearch, type RecentSearch } from "@/lib/recentSearch";
@@ -70,7 +70,7 @@ export function HomePage() {
 
   useEffect(() => {
     let active = true;
-    const conn = new HubConnectionBuilder().withUrl("/hubs/tracking").withAutomaticReconnect().build();
+    const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (snapshot: TrackSnapshot) => {
       setLiveBuses((current) => {
         const index = current.findIndex(

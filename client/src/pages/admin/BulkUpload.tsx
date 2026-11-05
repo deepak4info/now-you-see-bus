@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { api, getToken } from "@/lib/api";
+import { api, getToken, resolveUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   AlertCircle,
@@ -334,7 +334,7 @@ export function BulkUploadPage() {
     setDeletingCodes(true);
     try {
       const token = getToken();
-      const res = await fetch("/api/admin/bulk-upload/delete-records", {
+      const res = await fetch(resolveUrl("/api/admin/bulk-upload/delete-records"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -372,7 +372,7 @@ export function BulkUploadPage() {
     setLoadingHistory(true);
     try {
       const token = getToken();
-      const res = await fetch("/api/admin/bulk-upload/history", {
+      const res = await fetch(resolveUrl("/api/admin/bulk-upload/history"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
@@ -405,7 +405,7 @@ export function BulkUploadPage() {
     setError("");
     try {
       const token = getToken();
-      const res = await fetch(`/api/admin/bulk-upload/templates/${kind}`, {
+      const res = await fetch(resolveUrl(`/api/admin/bulk-upload/templates/${kind}`), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
 
@@ -475,7 +475,7 @@ export function BulkUploadPage() {
       formData.append("file", selectedFile);
 
       const token = getToken();
-      const res = await fetch(`/api/admin/bulk-upload/validate?type=${kind}`, {
+      const res = await fetch(resolveUrl(`/api/admin/bulk-upload/validate?type=${kind}`), {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
@@ -512,7 +512,7 @@ export function BulkUploadPage() {
 
     try {
       const token = getToken();
-      const res = await fetch(`/api/admin/bulk-upload/${importSession.importId}/commit?updateExisting=${updateExisting}`, {
+      const res = await fetch(resolveUrl(`/api/admin/bulk-upload/${importSession.importId}/commit?updateExisting=${updateExisting}`), {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -559,7 +559,7 @@ export function BulkUploadPage() {
     if (!importSession) return;
     try {
       const token = getToken();
-      const res = await fetch(`/api/admin/bulk-upload/${importSession.importId}/errors`, {
+      const res = await fetch(resolveUrl(`/api/admin/bulk-upload/${importSession.importId}/errors`), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
 
