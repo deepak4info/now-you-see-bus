@@ -75,29 +75,14 @@ builder.Services.AddSwaggerGen(options =>
     options.CustomSchemaIds(type => type.FullName?.Replace("+", ".") ?? type.Name);
 });
 
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.SetIsOriginAllowed(origin =>
-        {
-            if (string.IsNullOrWhiteSpace(origin)) return false;
-            if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
-            {
-                return uri.Host == "localhost" ||
-                       uri.Host == "127.0.0.1" ||
-                       uri.Host.EndsWith("itempurl.com", StringComparison.OrdinalIgnoreCase) ||
-                       uri.Host.EndsWith("site4now.net", StringComparison.OrdinalIgnoreCase) ||
-                       uri.Host.EndsWith("vercel.app", StringComparison.OrdinalIgnoreCase) ||
-                       uri.Host.Contains("whereismybus", StringComparison.OrdinalIgnoreCase) ||
-                       allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase);
-            }
-            return false;
-        })
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
+        policy.SetIsOriginAllowed(_ => true)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
@@ -175,6 +160,8 @@ app.UseExceptionHandler(handler =>
     });
 });
 
+app.UseCors();
+
 // Security headers
 app.Use(async (context, next) =>
 {
@@ -196,7 +183,6 @@ app.UseSwaggerUI(c =>
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "WhereIsMyBus API v1");
 });
 
-app.UseCors();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

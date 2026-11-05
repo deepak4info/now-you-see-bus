@@ -18,8 +18,17 @@ export function resolveUrl(path: string): string {
     return path;
   }
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  if (typeof window !== "undefined" && window.location.origin === API_BASE_URL) {
-    return cleanPath;
+  if (typeof window !== "undefined") {
+    try {
+      const targetHost = new URL(API_BASE_URL).host;
+      if (window.location.host === targetHost) {
+        return cleanPath;
+      }
+    } catch {
+      if (window.location.origin === API_BASE_URL) {
+        return cleanPath;
+      }
+    }
   }
   return `${API_BASE_URL}${cleanPath}`;
 }
