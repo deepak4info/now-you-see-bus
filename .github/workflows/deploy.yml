@@ -1,0 +1,92 @@
+name: CI/CD - Build, Test & Auto-Deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-and-package:
+    name: 🔨 Build, Test & Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: 📦 Install Frontend Dependencies & Build
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      - name: 📁 Embed Frontend Assets into wwwroot
+        run: |
+          rm -rf src/BusTrack.Api/wwwroot/*
+          cp -r client/dist/* src/BusTrack.Api/wwwroot/
+
+      - name: 🧪 Run Automated Unit & Anomaly Tests
+        run: |
+          dotnet test tests/BusTrack.Api.Tests/BusTrack.Api.Tests.csproj -c Release --verbosity normal
+
+      - name: 🚀 Publish Backend (.NET Release)
+        run: |
+          dotnet publish src/BusTrack.Api/BusTrack.Api.csproj -c Release -o ./publish
+          # Copy app_offline.htm template into publish folder for zero-lock deployments
+          cp src/BusTrack.Api/app_offline.htm ./publish/app_offline.htm.deploy || true
+
+      - name: 📦 Create Standalone Zip Package
+        run: |
+          cd publish
+          zip -r ../publish.zip .
+          cd ..
+
+      - name: 💾 Archive Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-publish-package
+          path: publish.zip
+          retention-days: 14
+
+  deploy-backend-smarterasp:
+    name: 🌐 Auto-Deploy Backend (SmarterASP FTP)
+    needs: test-and-package
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 📥 Download Published Package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-publish-package
+          path: ./deploy-package
+
+      - name: 📂 Unpack for Deployment
+        run: |
+          mkdir -p ./publish-files
+          unzip ./deploy-package/publish.zip -d ./publish-files
+
+      - name: 🚀 Deploy to SmarterASP.NET via FTP
+        if: env.HAS_PASSWORD == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        env:
+          HAS_PASSWORD: ${{ secrets.SMARTERASP_FTP_PASSWORD != '' }}
+        with:
+          server: ${{ secrets.SMARTERASP_FTP_SERVER != '' && secrets.SMARTERASP_FTP_SERVER || 'win8080.site4now.net' }}
+          username: ${{ secrets.SMARTERASP_FTP_USER != '' && secrets.SMARTERASP_FTP_USER || 'fatehabad4info-001' }}
+          password: ${{ secrets.SMARTERASP_FTP_PASSWORD }}
+          server-dir: ${{ secrets.SMARTERASP_FTP_DIR != '' && secrets.SMARTERASP_FTP_DIR || '/site1/' }}
+          local-dir: ./publish-files/
+          dangerous-clean-slate: false

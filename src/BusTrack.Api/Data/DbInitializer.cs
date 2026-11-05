@@ -44,6 +44,7 @@ public static class DbInitializer
 
         await SeedAccountsAsync(db, passwords);
         await SeedDelhiCorridorAsync(db, geometry, logger);
+        await SeedFatehabadDelhiCorridorAsync(db, geometry, logger);
         await SeedOperationsAsync(db);
         await DeduplicateStopsAsync(db, logger);
 
@@ -330,6 +331,99 @@ public static class DbInitializer
         {
             logger.LogInformation("Building road geometry along NH9 highway for Route 102 (Hisar - Delhi)...");
             await geometry.RebuildAsync(route102.Id);
+        }
+    }
+
+    private static async Task SeedFatehabadDelhiCorridorAsync(AppDbContext db, RouteGeometryService geometry, ILogger logger)
+    {
+        var op = await db.Operators.FirstOrDefaultAsync(o => o.Code == "HR")
+                 ?? await db.Operators.FirstOrDefaultAsync();
+        if (op is null) return;
+
+        var route = await db.Routes.FirstOrDefaultAsync(r => r.Code == "HR-DEL-01");
+        if (route is null)
+        {
+            route = new Route
+            {
+                Code = "HR-DEL-01",
+                Name = "Fatehabad - Agroha - Hisar - Hansi - Rohtak - Bahadurgarh - Delhi ISBT",
+                OperatorId = op.Id,
+                DistanceMode = "Auto",
+                IsActive = true
+            };
+            db.Routes.Add(route);
+            await db.SaveChangesAsync();
+        }
+        else if (!route.IsActive)
+        {
+            route.IsActive = true;
+            await db.SaveChangesAsync();
+        }
+
+        var stopDefs = new (int Id, string Code, string Name, decimal Lat, decimal Lng)[]
+        {
+            (25, "FATEHABAD", "Fatehabad Bus Stand", 29.5150m, 75.4550m),
+            (7, "AG-01", "Agroha", 29.3307m, 75.6331m),
+            (27, "HISAR", "Hisar Bus Stand", 29.1492m, 75.7217m),
+            (28, "HANSI", "Hansi Bus Stand", 29.1020m, 75.9630m),
+            (30, "ROHTAK", "Rohtak Bus Stand", 28.8955m, 76.6066m),
+            (31, "BAHADURGARH", "Bahadurgarh Bus Stand", 28.6929m, 76.9355m),
+            (33, "DELHI", "Delhi ISBT Kashmere Gate", 28.6675m, 77.2282m)
+        };
+
+        if (!await db.RouteStops.AnyAsync(rs => rs.RouteId == route.Id))
+        {
+            double[] legs = { 27.91, 22.65, 25.66, 76.24, 47.34, 29.80 };
+            double acc = 0;
+            for (int i = 0; i < stopDefs.Length; i++)
+            {
+                if (i > 0) acc += legs[i - 1];
+                db.RouteStops.Add(new RouteStop
+                {
+                    RouteId = route.Id,
+                    StopId = stopDefs[i].Id,
+                    SequenceNo = i + 1,
+                    DistanceFromOriginKm = (decimal)Math.Round(acc, 2),
+                    SegmentDistanceKm = i == 0 ? 0 : (decimal)Math.Round(legs[i - 1], 2)
+                });
+            }
+            route.DistanceKm = (decimal)Math.Round(acc, 2);
+            await db.SaveChangesAsync();
+        }
+
+        var bus105 = await db.Buses.FirstOrDefaultAsync(b => b.FleetNumber == "105")
+                     ?? await db.Buses.FirstOrDefaultAsync(b => b.IsActive);
+        var bus102 = await db.Buses.FirstOrDefaultAsync(b => b.FleetNumber == "102") ?? bus105;
+        var driver = await db.Drivers.FirstOrDefaultAsync(d => d.IsActive);
+
+        if (!await db.Schedules.AnyAsync(s => s.RouteId == route.Id))
+        {
+            var timings = new (TimeOnly Dep, Bus? Bus)[]
+            {
+                (new TimeOnly(6, 30), bus105),
+                (new TimeOnly(11, 45), bus102),
+                (new TimeOnly(16, 30), bus105)
+            };
+            foreach (var t in timings)
+            {
+                db.Schedules.Add(new Schedule
+                {
+                    RouteId = route.Id,
+                    BusId = t.Bus?.Id,
+                    DriverId = driver?.Id,
+                    DepartureTime = t.Dep,
+                    ServiceDays = "1111111",
+                    IsActive = true
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var ptCount = await db.RoutePoints.CountAsync(p => p.RouteId == route.Id);
+        if (ptCount < 30)
+        {
+            logger.LogInformation("Building road geometry along NH9 highway for Route HR-DEL-01...");
+            await geometry.RebuildAsync(route.Id);
         }
     }
 
