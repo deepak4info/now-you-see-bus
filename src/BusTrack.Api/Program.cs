@@ -89,6 +89,7 @@ builder.Services.AddCors(options =>
                        uri.Host == "127.0.0.1" ||
                        uri.Host.EndsWith("itempurl.com", StringComparison.OrdinalIgnoreCase) ||
                        uri.Host.EndsWith("site4now.net", StringComparison.OrdinalIgnoreCase) ||
+                       uri.Host.EndsWith("vercel.app", StringComparison.OrdinalIgnoreCase) ||
                        uri.Host.Contains("whereismybus", StringComparison.OrdinalIgnoreCase) ||
                        allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase);
             }
