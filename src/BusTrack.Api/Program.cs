@@ -144,20 +144,25 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-try
+// Run database readiness & daily schedule initialization asynchronously in the background
+// so IIS and Kestrel startup completes in under 100ms without hitting server timeouts
+_ = Task.Run(async () =>
 {
-    await DbInitializer.InitializeAsync(app.Services);
+    try
+    {
+        await DbInitializer.InitializeAsync(app.Services);
 
-    using var scope = app.Services.CreateScope();
-    var tracking = scope.ServiceProvider.GetRequiredService<TrackingService>();
-    if (await tracking.OperationsAreLive())
-        await tracking.MaterializeToday();
-}
-catch (Exception ex)
-{
-    var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
-    startupLogger.LogError(ex, "DbInitializer warning during startup: {Message}. The server will continue running.", ex.Message);
-}
+        using var scope = app.Services.CreateScope();
+        var tracking = scope.ServiceProvider.GetRequiredService<TrackingService>();
+        if (await tracking.OperationsAreLive())
+            await tracking.MaterializeToday();
+    }
+    catch (Exception ex)
+    {
+        var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+        startupLogger.LogError(ex, "Background DbInitializer warning: {Message}", ex.Message);
+    }
+});
 
 app.UseExceptionHandler(handler =>
 {
@@ -187,11 +192,12 @@ app.Use(async (context, next) =>
     await next();
 });
 
-if (app.Environment.IsDevelopment())
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.RoutePrefix = "swagger";
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "WhereIsMyBus API v1");
+});
 
 app.UseCors();
 app.UseRateLimiter();
@@ -199,6 +205,17 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<TrackingHub>("/hubs/tracking");
+
+app.MapGet("/", () => Results.Ok(new
+{
+    service = "Where Is My Bus API (Haryana Transit)",
+    status = "Online",
+    version = "1.0.0",
+    health = "/api/health",
+    search = "/api/search?from=Hisar&to=Delhi",
+    documentation = "/swagger"
+}));
+
 app.MapGet("/api/health", async (AppDbContext db) =>
 {
     var can = await db.Database.CanConnectAsync();
