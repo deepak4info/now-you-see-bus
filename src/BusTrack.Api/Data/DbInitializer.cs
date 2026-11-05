@@ -86,17 +86,17 @@ public static class DbInitializer
 
     private static async Task OpenWithRetry(SqlConnection conn, ILogger logger)
     {
-        for (var attempt = 1; attempt <= 30; attempt++)
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
             try
             {
                 await conn.OpenAsync();
                 return;
             }
-            catch (Exception ex) when (attempt < 30)
+            catch (Exception ex) when (attempt < 3)
             {
-                logger.LogWarning("SQL Server not ready ({Attempt}/30): {Message}", attempt, ex.Message);
-                await Task.Delay(TimeSpan.FromSeconds(2));
+                logger.LogWarning("SQL Server not ready ({Attempt}/3): {Message}", attempt, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(1));
             }
         }
     }
