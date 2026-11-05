@@ -186,7 +186,6 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
     if (!app.Environment.IsDevelopment())
     {
-        context.Response.Headers.Append("Content-Security-Policy", "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval'; style-src * 'unsafe-inline'; font-src * data:; img-src * data: blob:; connect-src * wss: ws:; frame-ancestors 'none';");
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
     await next();
