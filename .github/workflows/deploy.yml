@@ -80,16 +80,11 @@ jobs:
 
       - name: 🚀 Deploy to SmarterASP.NET via FTP
         if: env.HAS_PASSWORD == 'true'
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         env:
           HAS_PASSWORD: ${{ secrets.SMARTERASP_FTP_PASSWORD != '' }}
-        with:
-          server: ${{ secrets.SMARTERASP_FTP_SERVER != '' && secrets.SMARTERASP_FTP_SERVER || 'win8080.site4now.net' }}
-          username: ${{ secrets.SMARTERASP_FTP_USER != '' && secrets.SMARTERASP_FTP_USER || 'fatehabad4info-001' }}
-          password: ${{ secrets.SMARTERASP_FTP_PASSWORD }}
-          server-dir: ${{ secrets.SMARTERASP_FTP_DIR != '' && secrets.SMARTERASP_FTP_DIR || '/site1/' }}
-          local-dir: ./publish-files/
-          protocol: ftp
-          security: loose
-          log-level: verbose
-          dangerous-clean-slate: false
+          SMARTERASP_FTP_SERVER: ${{ secrets.SMARTERASP_FTP_SERVER != '' && secrets.SMARTERASP_FTP_SERVER || 'win8080.site4now.net' }}
+          SMARTERASP_FTP_USER: ${{ secrets.SMARTERASP_FTP_USER != '' && secrets.SMARTERASP_FTP_USER || 'fatehabad4info-001' }}
+          SMARTERASP_FTP_PASSWORD: ${{ secrets.SMARTERASP_FTP_PASSWORD }}
+          SMARTERASP_FTP_DIR: ${{ secrets.SMARTERASP_FTP_DIR }}
+        run: |
+          python3 scripts/deploy-ftp.py ./publish-files
