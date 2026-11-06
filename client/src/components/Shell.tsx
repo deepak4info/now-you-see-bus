@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { PwaBanner, InstallAppButton } from "./PwaBanner";
 
 const VISITOR_ID_KEY = "wimb_visitor_id";
 
@@ -42,12 +43,14 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen">
+      <PwaBanner />
       <header className="sticky top-0 z-[1100] border-b border-border/80 bg-paper/90 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4">
           <Link to="/" className="flex items-center gap-2">
             <span className="grid h-9 w-9 place-items-center rounded-xl bg-pine text-lg text-white">🚌</span>
             <span className="font-display text-xl leading-none">Where is my bus</span>
           </Link>
+          <InstallAppButton className="hidden sm:inline-flex" />
           <nav className="ml-auto hidden items-center gap-1 md:flex">
             {links.map((link) => (
               <NavLink
@@ -89,6 +92,9 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
         {open && (
           <div className="space-y-1 border-t px-4 py-3 md:hidden">
+            <div className="pb-2">
+              <InstallAppButton className="w-full justify-center py-2" />
+            </div>
             {links.map((link) => (
               <Link key={link.to} to={link.to} className="block rounded-md px-2 py-2" onClick={() => setOpen(false)}>
                 {link.label}

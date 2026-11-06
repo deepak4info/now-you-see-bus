@@ -1,0 +1,88 @@
+{
+  "name": "Where Is My Bus - Haryana Transit",
+  "short_name": "WhereIsMyBus",
+  "description": "Live bus tracking, routes, timings, and schedules for Haryana Roadways.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#1d6b4f",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": [
+    "travel",
+    "navigation",
+    "transportation"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/bus.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Search Buses",
+      "short_name": "Search",
+      "description": "Search Haryana bus timings and fares",
+      "url": "/",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Live Routes",
+      "short_name": "Live",
+      "description": "View live buses moving on the map",
+      "url": "/live",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Bus Stand Enquiry",
+      "short_name": "Enquiry",
+      "description": "Haryana Roadways bus stand phone numbers",
+      "url": "/bus-stands",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}
