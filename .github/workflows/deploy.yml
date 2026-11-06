@@ -89,4 +89,7 @@ jobs:
           password: ${{ secrets.SMARTERASP_FTP_PASSWORD }}
           server-dir: ${{ secrets.SMARTERASP_FTP_DIR != '' && secrets.SMARTERASP_FTP_DIR || '/site1/' }}
           local-dir: ./publish-files/
+          protocol: ftp
+          security: loose
+          log-level: verbose
           dangerous-clean-slate: false
