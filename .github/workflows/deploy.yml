@@ -1,4 +1,4 @@
-name: CI/CD - Build, Test & Auto-Deploy
+name: CI/CD - Build, Test & Auto-Deploy to SmarterASP
 
 on:
   push:
@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-and-package:
-    name: 🔨 Build, Test & Package
-    runs-on: ubuntu-latest
+  build-test-and-deploy:
+    name: 🚀 Build, Test & Deploy
+    runs-on: windows-latest
 
     steps:
-      - name: 📥 Checkout Code
+      - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
       - name: ⚙️ Setup .NET 8 SDK
@@ -26,68 +26,112 @@ jobs:
           cache: 'npm'
           cache-dependency-path: client/package-lock.json
 
-      - name: 📦 Install Frontend Dependencies & Build
+      - name: ⚙️ Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Build Frontend (PWA Client)
+        shell: bash
         run: |
           cd client
           npm ci
           npm run build
 
-      - name: 📁 Embed Frontend Assets into wwwroot
+      - name: 📁 Embed Frontend Assets into API wwwroot
+        shell: bash
         run: |
+          mkdir -p src/BusTrack.Api/wwwroot
           rm -rf src/BusTrack.Api/wwwroot/*
           cp -r client/dist/* src/BusTrack.Api/wwwroot/
 
       - name: 🧪 Run Automated Unit & Anomaly Tests
+        shell: bash
         run: |
           dotnet test tests/BusTrack.Api.Tests/BusTrack.Api.Tests.csproj -c Release --verbosity normal
 
-      - name: 🚀 Publish Backend (.NET Release)
+      - name: 🔨 Publish Backend (.NET 8 Release)
+        shell: bash
         run: |
           dotnet publish src/BusTrack.Api/BusTrack.Api.csproj -c Release -o ./publish
-          # Copy app_offline.htm template into publish folder for zero-lock deployments
-          cp src/BusTrack.Api/app_offline.htm ./publish/app_offline.htm.deploy || true
+          # Provide app_offline template in publish folder
+          cp src/BusTrack.Api/app_offline.htm ./publish/app_offline.htm.deploy 2>/dev/null || true
 
-      - name: 📦 Create Standalone Zip Package
-        run: |
-          cd publish
-          zip -r ../publish.zip .
-          cd ..
-
-      - name: 💾 Archive Release Artifact
+      - name: 💾 Archive Publish Artifact (Downloadable Backup)
         uses: actions/upload-artifact@v4
         with:
-          name: release-publish-package
-          path: publish.zip
+          name: bus-track-production-release
+          path: ./publish
           retention-days: 14
 
-  deploy-backend-smarterasp:
-    name: 🌐 Auto-Deploy Backend (SmarterASP FTP)
-    needs: test-and-package
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: 📥 Checkout Code for Deploy Scripts
-        uses: actions/checkout@v4
-
-      - name: 📥 Download Published Package
-        uses: actions/download-artifact@v4
-        with:
-          name: release-publish-package
-          path: ./deploy-package
-
-      - name: 📂 Unpack for Deployment
-        run: |
-          mkdir -p ./publish-files
-          unzip ./deploy-package/publish.zip -d ./publish-files
-
-      - name: 🚀 Deploy to SmarterASP.NET via FTP
-        if: env.HAS_PASSWORD == 'true'
+      - name: 🌐 Deploy to SmarterASP.NET (Web Deploy with Zero-Lock Fallback)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
         env:
-          HAS_PASSWORD: ${{ secrets.SMARTERASP_FTP_PASSWORD != '' }}
-          SMARTERASP_FTP_SERVER: ${{ secrets.SMARTERASP_FTP_SERVER != '' && secrets.SMARTERASP_FTP_SERVER || 'win8080.site4now.net' }}
-          SMARTERASP_FTP_USER: ${{ secrets.SMARTERASP_FTP_USER != '' && secrets.SMARTERASP_FTP_USER || 'fatehabad4info-001' }}
-          SMARTERASP_FTP_PASSWORD: ${{ secrets.SMARTERASP_FTP_PASSWORD }}
+          WEBSITE_NAME: ${{ secrets.WEBSITE_NAME }}
+          SERVER_COMPUTER_NAME: ${{ secrets.SERVER_COMPUTER_NAME }}
+          SERVER_USERNAME: ${{ secrets.SERVER_USERNAME || secrets.SMARTERASP_FTP_USER }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD || secrets.SMARTERASP_PASSWORD || secrets.SMARTERASP_FTP_PASSWORD }}
+          SMARTERASP_FTP_SERVER: ${{ secrets.SMARTERASP_FTP_SERVER }}
           SMARTERASP_FTP_DIR: ${{ secrets.SMARTERASP_FTP_DIR }}
         run: |
-          python3 scripts/deploy-ftp.py ./publish-files
+          $site = if ($env:WEBSITE_NAME) { $env:WEBSITE_NAME } else { "fatehabad4info-001-site1" }
+          $server = if ($env:SERVER_COMPUTER_NAME) { $env:SERVER_COMPUTER_NAME } else { "https://win8080.site4now.net:8172/msdeploy.axd?site=fatehabad4info-001-site1" }
+          $username = if ($env:SERVER_USERNAME) { $env:SERVER_USERNAME } else { "fatehabad4info-001" }
+          $password = $env:SERVER_PASSWORD
+
+          if ([string]::IsNullOrWhiteSpace($password)) {
+            Write-Host "::error::No deployment password configured in GitHub Secrets!"
+            Write-Host "👉 Please configure 'SERVER_PASSWORD' or 'SMARTERASP_FTP_PASSWORD' in your repository secrets."
+            Write-Host "   (Settings -> Secrets and variables -> Actions -> New repository secret)"
+            Write-Host "   NOTE: Your SmarterASP password is [Same as Control Panel]!"
+            exit 1
+          }
+
+          $msdeployPaths = @(
+            "C:\Program Files\IIS\Microsoft Web Deploy V3\msdeploy.exe",
+            "C:\Program Files (x86)\IIS\Microsoft Web Deploy V3\msdeploy.exe"
+          )
+          $msdeploy = $msdeployPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          $publishFolder = (Resolve-Path "./publish").Path
+          $deploySucceeded = $false
+
+          if ($msdeploy) {
+            Write-Host "🚀 Strategy 1: Attempting Web Deploy (MSDeploy)..."
+            Write-Host "   Target Site: $site"
+            Write-Host "   Target Server: $server"
+            Write-Host "   User: $username"
+
+            try {
+              & $msdeploy `
+                -verb:sync `
+                -source:contentPath="$publishFolder" `
+                -dest:contentPath="$site",ComputerName="$server",UserName="$username",Password="$password",AuthType="Basic" `
+                -allowUntrusted `
+                -enableRule:AppOffline `
+                -enableRule:DoNotDeleteRule
+
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Web Deploy succeeded cleanly!"
+                $deploySucceeded = $true
+              } else {
+                Write-Host "⚠️ Web Deploy exited with code $LASTEXITCODE. Falling back to zero-lock FTP..."
+              }
+            } catch {
+              Write-Host "⚠️ Web Deploy encountered an issue: $_. Falling back to zero-lock FTP..."
+            }
+          } else {
+            Write-Host "ℹ️ msdeploy.exe not found on runner path. Using zero-lock FTP deploy..."
+          }
+
+          if (-not $deploySucceeded) {
+            Write-Host "📡 Strategy 2: Executing Zero-Lock FTP deployment..."
+            python scripts/deploy-ftp.py "$publishFolder"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::Both Web Deploy and FTP deployments failed. Please verify credentials."
+              exit 1
+            }
+          }
+
+          Write-Host "🎉 BACKEND DEPLOYMENT COMPLETED SUCCESSFULLY!"

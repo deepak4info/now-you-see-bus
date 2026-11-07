@@ -5,26 +5,34 @@ import time
 import io
 import ftplib
 
-server = os.environ.get("SMARTERASP_FTP_SERVER") or "win8080.site4now.net"
-username = os.environ.get("SMARTERASP_FTP_USER") or "fatehabad4info-001"
-password = os.environ.get("SMARTERASP_FTP_PASSWORD")
-target_dir = os.environ.get("SMARTERASP_FTP_DIR") or ""
-local_dir = sys.argv[1] if len(sys.argv) > 1 else "./publish-files"
+server = os.environ.get("SMARTERASP_FTP_SERVER") or os.environ.get("FTP_SERVER") or "win8080.site4now.net"
+username = os.environ.get("SMARTERASP_FTP_USER") or os.environ.get("SERVER_USERNAME") or "fatehabad4info-001"
+password = (
+    os.environ.get("SMARTERASP_FTP_PASSWORD")
+    or os.environ.get("SERVER_PASSWORD")
+    or os.environ.get("SMARTERASP_PASSWORD")
+    or ""
+).strip()
+target_dir = os.environ.get("SMARTERASP_FTP_DIR") or os.environ.get("FTP_DIR") or ""
+local_dir = sys.argv[1] if len(sys.argv) > 1 else "./publish"
 
 if not password:
-    print("❌ ERROR: SMARTERASP_FTP_PASSWORD secret is empty in GitHub Secrets!")
-    print("Please go to GitHub Repo -> Settings -> Secrets and variables -> Actions, and add SMARTERASP_FTP_PASSWORD.")
+    print("❌ ERROR: No deployment password found in GitHub Secrets!")
+    print("👉 Please add 'SERVER_PASSWORD' or 'SMARTERASP_FTP_PASSWORD' in your GitHub Repository Secrets:")
+    print("   GitHub -> Settings -> Secrets and variables -> Actions -> Repository secrets")
+    print("   NOTE: As indicated on your SmarterASP Server Details, this password is [Same as Control Panel]!")
     sys.exit(1)
 
-print(f"📡 Connecting to FTP server '{server}:21' as user '{username}'...")
+print(f"📡 Connecting to SmarterASP FTP server '{server}:21' as user '{username}'...")
 try:
     ftp = ftplib.FTP(server, timeout=45)
     ftp.login(username, password)
     ftp.set_pasv(True)
     print("✅ FTP Login successful!")
 except ftplib.error_perm as e:
-    print(f"❌ FTP Authentication Failed: {e}")
-    print("👉 Please double-check your FTP username and password in SmarterASP Control Panel (Websites -> FTP Accounts).")
+    print(f"❌ FTP Authentication Failed (530): {e}")
+    print("👉 IMPORTANT: Your SmarterASP FTP password is the EXACT SAME password you use to log into your SmarterASP Control Panel.")
+    print("   Please update 'SERVER_PASSWORD' or 'SMARTERASP_FTP_PASSWORD' in GitHub Secrets with your SmarterASP Control Panel login password.")
     sys.exit(1)
 except Exception as e:
     print(f"❌ Failed to connect to FTP server: {e}")
