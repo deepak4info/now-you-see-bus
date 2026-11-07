@@ -269,55 +269,57 @@ export function HomePage() {
   return (
     <div className="relative mx-auto max-w-7xl px-4 pb-20 pt-4 sm:px-6 lg:px-8">
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 1: HERO (DARPAN / HEALTHORA 3D DIGITAL TWIN DESIGN)
+          SECTION 1: HERO (BALANCED SPLIT HERO - OPTION 1)
           Split Grid: 1.05fr (Story, Badge & Search) : 0.95fr (3D Model)
           ───────────────────────────────────────────────────────────── */}
-      <section className="relative pt-2 pb-10 sm:pt-6 sm:pb-14">
-        <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10">
+      <section className="relative pt-2 pb-10 sm:pt-6 sm:pb-12">
+        <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10">
           
           {/* Left Column: Pill Badge, High-Impact Typography, Search & Trust Proof */}
-          <div className="flex flex-col">
-            {/* Pill Badge with Pulsing Emerald Dot */}
-            <div className="inline-flex w-fit items-center gap-2.5 rounded-full border border-emerald-200/80 bg-emerald-50/70 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-emerald-900 shadow-2xs backdrop-blur-md">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-              <span>Haryana Roadways · Live Service Intelligence</span>
+          <div className="flex flex-col justify-between">
+            <div>
+              {/* Pill Badge with Pulsing Emerald Dot */}
+              <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200/80 bg-emerald-50/80 px-3.5 py-1 text-xs font-bold uppercase tracking-wider text-emerald-900 shadow-2xs">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <span>Haryana Roadways · Live Telemetry</span>
+              </div>
+
+              {/* Main Headline */}
+              <h1 className="mt-3.5 font-display text-3xl font-extrabold tracking-tight text-ink sm:text-4xl lg:text-[2.85rem] lg:leading-[1.15]">
+                Understand your bus journey on an{" "}
+                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 bg-clip-text text-transparent">
+                  interactive 3D Digital Twin
+                </span>
+                .
+              </h1>
+
+              {/* Subtitle */}
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
+                Real-time GPS telemetry, highway road-snapping, live seat availability, and bilingual voice announcements — simple, clear, and reliable.
+              </p>
             </div>
 
-            {/* Main Headline */}
-            <h1 className="mt-4 font-display text-4xl font-extrabold tracking-tight text-ink sm:text-5xl lg:text-[3.2rem] lg:leading-[1.12]">
-              Understand your bus journey on an{" "}
-              <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 bg-clip-text text-transparent">
-                interactive 3D Digital Twin
-              </span>
-              .
-            </h1>
-
-            {/* Subtitle */}
-            <p className="mt-4 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
-              Real-time GPS telemetry, road-snapped highway routing, live seat availability, and bilingual voice announcements — simple, clear, and reliable for daily commuters.
-            </p>
-
             {/* Interactive Journey Search Card */}
-            <div id="journey-search" className="mt-7 rounded-3xl border border-border/80 bg-card p-5 shadow-lg shadow-black/5 sm:p-6">
-              <div className="flex items-center justify-between pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="grid h-7 w-7 place-items-center rounded-lg bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                    <Search className="h-4 w-4" />
+            <div id="journey-search" className="mt-5 rounded-3xl border border-border/80 bg-card p-4.5 shadow-md shadow-emerald-950/5 sm:p-5">
+              <div className="flex items-center justify-between pb-2.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="grid h-6 w-6 place-items-center rounded-md bg-emerald-100 text-emerald-800">
+                    <Search className="h-3.5 w-3.5" />
                   </span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
                     Quick Journey Search
                   </span>
                 </div>
-                <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                <span className="text-[11px] font-semibold text-emerald-700">
                   50+ Depots Connected
                 </span>
               </div>
 
-              <form onSubmit={search} className="grid gap-3">
-                <div className="relative grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-x-10">
+              <form onSubmit={search} className="grid gap-2.5">
+                <div className="relative grid w-full grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-x-8">
                   <StopField
                     key={`from-${stopFieldsVersion}`}
                     label="From (Boarding)"
@@ -332,7 +334,7 @@ export function HomePage() {
                   <button
                     type="button"
                     aria-label="Swap boarding and destination"
-                    className="mx-auto grid h-9 w-9 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-2xs transition-transform hover:scale-110 hover:border-emerald-500 hover:text-emerald-700 sm:absolute sm:left-1/2 sm:top-[38px] sm:z-10 sm:-translate-x-1/2"
+                    className="mx-auto grid h-8 w-8 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-2xs transition-transform hover:scale-110 hover:border-emerald-500 hover:text-emerald-700 sm:absolute sm:left-1/2 sm:top-[34px] sm:z-10 sm:-translate-x-1/2"
                     onClick={() => {
                       setFrom(to);
                       setTo(from);
@@ -340,7 +342,7 @@ export function HomePage() {
                       setError("");
                     }}
                   >
-                    <ArrowLeftRight className="h-4 w-4" />
+                    <ArrowLeftRight className="h-3.5 w-3.5" />
                   </button>
 
                   <StopField
@@ -356,11 +358,11 @@ export function HomePage() {
                   {/* Date Picker */}
                   <label
                     htmlFor="travel-date"
-                    className="flex min-h-[72px] min-w-0 items-center gap-3 rounded-2xl border border-border/80 bg-background/50 px-3.5 py-2.5 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15"
+                    className="flex min-h-[66px] min-w-0 items-center gap-2.5 rounded-2xl border border-border/80 bg-background/50 px-3 py-2 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15"
                   >
-                    <CalendarDays className="h-5 w-5 shrink-0 text-emerald-700" />
+                    <CalendarDays className="h-4.5 w-4.5 shrink-0 text-emerald-700" />
                     <span className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                         Date of Travel
                       </span>
                       <input
@@ -369,9 +371,9 @@ export function HomePage() {
                         required
                         value={travelDate}
                         onChange={(e) => setTravelDate(e.target.value)}
-                        className="h-7 w-full border-0 bg-transparent p-0 text-sm font-bold text-ink outline-none"
+                        className="h-6 w-full border-0 bg-transparent p-0 text-xs font-bold text-ink outline-none"
                       />
-                      <span className="truncate text-[11px] text-muted-foreground">
+                      <span className="truncate text-[10px] text-muted-foreground">
                         {travelDate === getIndiaDate()
                           ? `${formatDateWithWeekday(travelDate)} · Today`
                           : formatDateWithWeekday(travelDate)}
@@ -383,9 +385,9 @@ export function HomePage() {
                   <Button
                     type="submit"
                     size="lg"
-                    className="h-full min-h-[64px] w-full rounded-2xl bg-emerald-700 text-base font-bold text-white shadow-md shadow-emerald-700/20 hover:bg-emerald-800 transition-all sm:min-h-[72px]"
+                    className="h-full min-h-[58px] w-full rounded-2xl bg-emerald-700 text-sm font-bold text-white shadow-sm hover:bg-emerald-800 transition-all sm:min-h-[66px]"
                   >
-                    <Search className="h-5 w-5 mr-1" />
+                    <Search className="h-4 w-4 mr-1" />
                     Find Live Buses
                   </Button>
                 </div>
@@ -394,19 +396,18 @@ export function HomePage() {
                 {error && <p className="text-xs text-destructive">{error}</p>}
 
                 {/* Popular Corridor Quick Select */}
-                <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-3">
-                  <span className="text-[11px] font-semibold text-muted-foreground mr-1">
-                    Popular Corridors:
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5">
+                  <span className="text-[10px] font-semibold text-muted-foreground mr-1">
+                    Popular:
                   </span>
                   {POPULAR_CORRIDORS.map((c, i) => (
                     <button
                       key={i}
                       type="button"
                       onClick={() => searchFor(c.from, c.to, travelDate)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-muted/40 px-2.5 py-1 text-xs font-medium text-ink transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800"
+                      className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-muted/40 px-2.5 py-0.5 text-[11px] font-medium text-ink transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800"
                     >
                       <span>{c.from} ➔ {c.to}</span>
-                      <span className="text-[10px] text-muted-foreground">({c.tag})</span>
                     </button>
                   ))}
                 </div>
@@ -414,18 +415,18 @@ export function HomePage() {
             </div>
 
             {/* Trust Proof Bar (Matching Darpan's Trust Signals) */}
-            <div className="mt-5 flex flex-wrap items-center gap-y-2 gap-x-5 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <ShieldCheck className="h-4 w-4 text-emerald-600" /> No login needed
+            <div className="mt-4 flex flex-wrap items-center gap-y-1.5 gap-x-4 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" /> No login needed
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Wifi className="h-4 w-4 text-emerald-600" /> Sub-second SignalR stream
+              <span className="inline-flex items-center gap-1">
+                <Wifi className="h-3.5 w-3.5 text-emerald-600" /> Sub-second SignalR stream
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Volume2 className="h-4 w-4 text-emerald-600" /> Hindi & English voice
+              <span className="inline-flex items-center gap-1">
+                <Volume2 className="h-3.5 w-3.5 text-emerald-600" /> Hindi & English voice
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Smartphone className="h-4 w-4 text-emerald-600" /> Offline PWA ready
+              <span className="inline-flex items-center gap-1">
+                <Smartphone className="h-3.5 w-3.5 text-emerald-600" /> Offline PWA ready
               </span>
             </div>
           </div>
