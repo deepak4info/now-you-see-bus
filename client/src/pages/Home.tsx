@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  Activity,
   ArrowLeftRight,
   ArrowRight,
   BusFront,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
-  ChevronUp,
-  CircleCheck,
   Clock,
+  Compass,
   HelpCircle,
   MapPin,
   Navigation,
   Phone,
-  Radio,
   Route as RouteIcon,
   Search,
   ShieldCheck,
@@ -31,8 +28,6 @@ import { HubConnectionBuilder } from "@microsoft/signalr";
 import { MapView, type BusPin } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNotice";
-import { BusDigitalTwinViewer } from "@/components/BusDigitalTwinViewer";
-import { SoundToggle } from "@/components/SoundToggle";
 import { Button } from "@/components/ui/button";
 import { resolveUrl, useQuery } from "@/lib/api";
 import { ago, formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly } from "@/lib/format";
@@ -46,33 +41,11 @@ const EMPTY_PATH: TrackSnapshot["path"] = [];
 const EMPTY_STOPS: TrackSnapshot["stops"] = [];
 
 const POPULAR_CORRIDORS = [
-  { from: "Hisar", to: "Fatehabad", tag: "NH-9 Express" },
-  { from: "Sirsa", to: "Delhi", tag: "Intercity" },
-  { from: "Fatehabad", to: "Chandigarh", tag: "Capital Link" },
-  { from: "Rohtak", to: "Delhi", tag: "Frequent" },
-];
-
-const FAQS = [
-  {
-    q: "Do I need to create an account or log in to track buses?",
-    a: "No. Live bus tracking, 3D digital twin inspection, schedule lookups, and route maps are 100% free and require zero login. Just open the app and find your bus immediately.",
-  },
-  {
-    q: "How accurate is the live ETA and bus location?",
-    a: "Every Haryana Roadways bus transmits GPS coordinates, speed, and heading every 3 to 5 seconds. Our telemetry engine snaps raw coordinates to real highway curves (via OSRM) and computes arrival times based on live speed and historical depot delays.",
-  },
-  {
-    q: "Does this work offline when mobile internet is slow or unavailable?",
-    a: "Yes! WhereIsMyBus is a Progressive Web App (PWA). Once installed or opened, all frequent routes, depot timetables, and inquiry numbers are cached locally on your device, allowing you to check schedules even with zero network.",
-  },
-  {
-    q: "How does the Crowd & Seat Availability Sensor work?",
-    a: "Automated door optical sensors tally passengers boarding and alighting at each bus stand. The system calculates real-time occupancy percentage so commuters can see if seats are available before the bus arrives.",
-  },
-  {
-    q: "Can I hear stop arrival announcements in Hindi?",
-    a: "Yes. Our built-in transit voice engine announces upcoming stations and live delays in both Hindi and English. Simply tap the Sound icon in the top bar to enable voice assistance.",
-  },
+  { from: "Hisar", to: "Fatehabad" },
+  { from: "Sirsa", to: "Delhi" },
+  { from: "Fatehabad", to: "Chandigarh" },
+  { from: "Rohtak", to: "Delhi" },
+  { from: "Hisar", to: "Sirsa" },
 ];
 
 export function HomePage() {
@@ -109,14 +82,13 @@ export function HomePage() {
   const [to, setTo] = useState(() => homeParams.get("to") ?? recentSearch.to);
   const [error, setError] = useState("");
   const [stopFieldsVersion, setStopFieldsVersion] = useState(0);
-  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (liveBusesQuery.data) setLiveBuses(liveBusesQuery.data);
   }, [liveBusesQuery.data]);
 
-  // Determine active route corridor: selected by user, or one with running bus, or matching search, or first route
+  // Determine active route corridor
   const activeRoute = routes.find((r) => r.id === selectedRouteId)
     ?? routes.find((r) => r.liveCount > 0)
     ?? routes.find((r) => r.id === recentBusSeed?.routeId)
@@ -192,10 +164,9 @@ export function HomePage() {
     setFrom(nextSearch.from);
     setTo(nextSearch.to);
 
-    // Speak announcement if voice enabled
     transitVoice.speak({
-      en: `Searching live buses from ${nextSearch.from} to ${nextSearch.to}.`,
-      hi: `${nextSearch.from} से ${nextSearch.to} के लिए बसें खोजी जा रही हैं।`,
+      en: `Searching buses from ${nextSearch.from} to ${nextSearch.to}.`,
+      hi: `${nextSearch.from} से ${nextSearch.to} की बसें खोजी जा रही हैं।`,
     });
 
     navigate(`/search?from=${encodeURIComponent(nextSearch.from)}&to=${encodeURIComponent(nextSearch.to)}&date=${date}`);
@@ -267,276 +238,274 @@ export function HomePage() {
     : null;
 
   return (
-    <div className="relative mx-auto max-w-7xl px-4 pb-20 pt-4 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-5xl px-4 pb-20 pt-6 sm:px-6">
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 1: HERO (BALANCED SPLIT HERO - OPTION 1)
-          Split Grid: 1.05fr (Story, Badge & Search) : 0.95fr (3D Model)
+          1. SIMPLE, WELCOMING HERO & SEARCH
+          Clean, centered, frictionless search card
           ───────────────────────────────────────────────────────────── */}
-      <section className="relative pt-2 pb-10 sm:pt-6 sm:pb-12">
-        <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-10">
-          
-          {/* Left Column: Pill Badge, High-Impact Typography, Search & Trust Proof */}
-          <div className="flex flex-col justify-between">
-            <div>
-              {/* Pill Badge with Pulsing Emerald Dot */}
-              <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200/80 bg-emerald-50/80 px-3.5 py-1 text-xs font-bold uppercase tracking-wider text-emerald-900 shadow-2xs">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <span>Haryana Roadways · Live Telemetry</span>
-              </div>
+      <section className="text-center pt-2 pb-8 sm:pt-6 sm:pb-10">
+        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50/80 px-3.5 py-1 text-xs font-semibold text-emerald-800 shadow-2xs">
+          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>Haryana Roadways · Live Bus Tracker</span>
+        </div>
 
-              {/* Main Headline */}
-              <h1 className="mt-3.5 font-display text-3xl font-extrabold tracking-tight text-ink sm:text-4xl lg:text-[2.85rem] lg:leading-[1.15]">
-                Understand your bus journey on an{" "}
-                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 bg-clip-text text-transparent">
-                  interactive 3D Digital Twin
-                </span>
-                .
-              </h1>
+        <h1 className="mt-3 font-display text-3xl font-extrabold tracking-tight text-ink sm:text-4xl lg:text-5xl">
+          Where is your bus?
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground sm:text-base max-w-xl mx-auto">
+          Find live bus locations, departure times, and routes across Haryana and Delhi NCR.
+        </p>
 
-              {/* Subtitle */}
-              <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-                Real-time GPS telemetry, highway road-snapping, live seat availability, and bilingual voice announcements — simple, clear, and reliable.
-              </p>
-            </div>
+        {/* The Clean Search Box */}
+        <div className="mt-6 mx-auto max-w-3xl rounded-3xl border border-border/80 bg-card p-4 sm:p-6 shadow-md shadow-emerald-950/5 text-left">
+          <form onSubmit={search} className="grid gap-3">
+            <div className="relative grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-x-8">
+              <StopField
+                key={`from-${stopFieldsVersion}`}
+                label="From (Boarding Stand)"
+                value={from}
+                stops={stops.data ?? []}
+                loading={stops.loading}
+                onChange={setFrom}
+                icon={BusFront}
+              />
 
-            {/* Interactive Journey Search Card */}
-            <div id="journey-search" className="mt-5 rounded-3xl border border-border/80 bg-card p-4.5 shadow-md shadow-emerald-950/5 sm:p-5">
-              <div className="flex items-center justify-between pb-2.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="grid h-6 w-6 place-items-center rounded-md bg-emerald-100 text-emerald-800">
-                    <Search className="h-3.5 w-3.5" />
+              {/* Swap Button */}
+              <button
+                type="button"
+                aria-label="Swap stops"
+                className="mx-auto grid h-8 w-8 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-2xs transition-transform hover:scale-110 hover:border-emerald-500 hover:text-emerald-700 sm:absolute sm:left-1/2 sm:top-[34px] sm:z-10 sm:-translate-x-1/2 cursor-pointer"
+                onClick={() => {
+                  setFrom(to);
+                  setTo(from);
+                  setStopFieldsVersion((v) => v + 1);
+                  setError("");
+                }}
+              >
+                <ArrowLeftRight className="h-3.5 w-3.5" />
+              </button>
+
+              <StopField
+                key={`to-${stopFieldsVersion}`}
+                label="To (Destination Stand)"
+                value={to}
+                stops={stops.data ?? []}
+                loading={stops.loading}
+                onChange={setTo}
+                icon={MapPin}
+              />
+
+              {/* Travel Date */}
+              <label
+                htmlFor="travel-date"
+                className="flex min-h-[66px] min-w-0 items-center gap-3 rounded-2xl border border-border/80 bg-background/50 px-3.5 py-2 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15 cursor-pointer"
+              >
+                <CalendarDays className="h-5 w-5 shrink-0 text-emerald-700" />
+                <span className="grid min-w-0 flex-1 gap-0.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Journey Date
                   </span>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                    Quick Journey Search
-                  </span>
-                </div>
-                <span className="text-[11px] font-semibold text-emerald-700">
-                  50+ Depots Connected
-                </span>
-              </div>
-
-              <form onSubmit={search} className="grid gap-2.5">
-                <div className="relative grid w-full grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-x-8">
-                  <StopField
-                    key={`from-${stopFieldsVersion}`}
-                    label="From (Boarding)"
-                    value={from}
-                    stops={stops.data ?? []}
-                    loading={stops.loading}
-                    onChange={setFrom}
-                    icon={BusFront}
+                  <input
+                    id="travel-date"
+                    type="date"
+                    required
+                    value={travelDate}
+                    onChange={(e) => setTravelDate(e.target.value)}
+                    className="h-6 w-full border-0 bg-transparent p-0 text-xs font-bold text-ink outline-none cursor-pointer"
                   />
-
-                  {/* Swap Button */}
-                  <button
-                    type="button"
-                    aria-label="Swap boarding and destination"
-                    className="mx-auto grid h-8 w-8 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-2xs transition-transform hover:scale-110 hover:border-emerald-500 hover:text-emerald-700 sm:absolute sm:left-1/2 sm:top-[34px] sm:z-10 sm:-translate-x-1/2"
-                    onClick={() => {
-                      setFrom(to);
-                      setTo(from);
-                      setStopFieldsVersion((v) => v + 1);
-                      setError("");
-                    }}
-                  >
-                    <ArrowLeftRight className="h-3.5 w-3.5" />
-                  </button>
-
-                  <StopField
-                    key={`to-${stopFieldsVersion}`}
-                    label="To (Destination)"
-                    value={to}
-                    stops={stops.data ?? []}
-                    loading={stops.loading}
-                    onChange={setTo}
-                    icon={MapPin}
-                  />
-
-                  {/* Date Picker */}
-                  <label
-                    htmlFor="travel-date"
-                    className="flex min-h-[66px] min-w-0 items-center gap-2.5 rounded-2xl border border-border/80 bg-background/50 px-3 py-2 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15"
-                  >
-                    <CalendarDays className="h-4.5 w-4.5 shrink-0 text-emerald-700" />
-                    <span className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Date of Travel
-                      </span>
-                      <input
-                        id="travel-date"
-                        type="date"
-                        required
-                        value={travelDate}
-                        onChange={(e) => setTravelDate(e.target.value)}
-                        className="h-6 w-full border-0 bg-transparent p-0 text-xs font-bold text-ink outline-none"
-                      />
-                      <span className="truncate text-[10px] text-muted-foreground">
-                        {travelDate === getIndiaDate()
-                          ? `${formatDateWithWeekday(travelDate)} · Today`
-                          : formatDateWithWeekday(travelDate)}
-                      </span>
-                    </span>
-                  </label>
-
-                  {/* Submit Button */}
-                  <Button
-                    type="submit"
-                    size="lg"
-                    className="h-full min-h-[58px] w-full rounded-2xl bg-emerald-700 text-sm font-bold text-white shadow-sm hover:bg-emerald-800 transition-all sm:min-h-[66px]"
-                  >
-                    <Search className="h-4 w-4 mr-1" />
-                    Find Live Buses
-                  </Button>
-                </div>
-
-                {stops.error && <p className="text-xs text-destructive">{stops.error}</p>}
-                {error && <p className="text-xs text-destructive">{error}</p>}
-
-                {/* Popular Corridor Quick Select */}
-                <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5">
-                  <span className="text-[10px] font-semibold text-muted-foreground mr-1">
-                    Popular:
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    {travelDate === getIndiaDate()
+                      ? `${formatDateWithWeekday(travelDate)} · Today`
+                      : formatDateWithWeekday(travelDate)}
                   </span>
-                  {POPULAR_CORRIDORS.map((c, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => searchFor(c.from, c.to, travelDate)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-muted/40 px-2.5 py-0.5 text-[11px] font-medium text-ink transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800"
-                    >
-                      <span>{c.from} ➔ {c.to}</span>
-                    </button>
-                  ))}
-                </div>
-              </form>
+                </span>
+              </label>
+
+              {/* Search Button */}
+              <Button
+                type="submit"
+                size="lg"
+                className="h-full min-h-[58px] w-full rounded-2xl bg-emerald-700 text-sm font-bold text-white shadow-sm hover:bg-emerald-800 transition-all sm:min-h-[66px] cursor-pointer"
+              >
+                <Search className="h-4 w-4 mr-1.5" />
+                Search Buses
+              </Button>
             </div>
 
-            {/* Trust Proof Bar (Matching Darpan's Trust Signals) */}
-            <div className="mt-4 flex flex-wrap items-center gap-y-1.5 gap-x-4 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" /> No login needed
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Wifi className="h-3.5 w-3.5 text-emerald-600" /> Sub-second SignalR stream
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Volume2 className="h-3.5 w-3.5 text-emerald-600" /> Hindi & English voice
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Smartphone className="h-3.5 w-3.5 text-emerald-600" /> Offline PWA ready
-              </span>
-            </div>
-          </div>
+            {stops.error && <p className="text-xs text-destructive text-center">{stops.error}</p>}
+            {error && <p className="text-xs text-destructive text-center">{error}</p>}
 
-          {/* Right Column: 3D Bus Digital Twin Viewer */}
-          <div className="relative">
-            <BusDigitalTwinViewer />
-          </div>
+            {/* Popular Route Shortcuts */}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-border/60 pt-3">
+              <span className="text-[11px] font-semibold text-muted-foreground mr-1">
+                Quick Routes:
+              </span>
+              {POPULAR_CORRIDORS.map((c, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => searchFor(c.from, c.to, travelDate)}
+                  className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-muted/40 px-3 py-1 text-xs font-medium text-ink transition-colors hover:border-emerald-500 hover:bg-emerald-50 hover:text-emerald-900 cursor-pointer"
+                >
+                  <span>{c.from} ➔ {c.to}</span>
+                </button>
+              ))}
+            </div>
+          </form>
+        </div>
+
+        {/* Simple Trust Pills */}
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> No login needed
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Wifi className="h-3.5 w-3.5 text-emerald-600" /> Live GPS updates
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Smartphone className="h-3.5 w-3.5 text-emerald-600" /> Works on any phone
+          </span>
+          <Link to="/enquiry-numbers" className="inline-flex items-center gap-1 text-emerald-700 hover:underline font-semibold">
+            <Phone className="h-3.5 w-3.5" /> Stand helpline numbers
+          </Link>
         </div>
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 2: LIVE NETWORK CORRIDORS & ACTIVE FLEET BAR
+          2. BUSES ON THE ROAD (REAL-TIME LIVE FLEET)
+          Clean, simple cards showing running buses
           ───────────────────────────────────────────────────────────── */}
-      {routes.length > 0 && (
-        <section className="mb-8 rounded-2xl border border-emerald-200/70 bg-emerald-50/40 p-3 sm:px-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-950">
-              <RouteIcon className="h-4 w-4 text-emerald-700" />
-              <span>Live Highway Corridors</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto py-0.5">
-              {routes.map((r) => {
-                const isSelected = r.id === activeRoute?.id;
-                return (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRouteId(r.id);
-                      setFrom(r.origin);
-                      setTo(r.destination);
-                    }}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs transition-all whitespace-nowrap cursor-pointer",
-                      isSelected
-                        ? "bg-emerald-700 text-white font-semibold shadow-xs ring-2 ring-emerald-500/30"
-                        : "border border-border/80 bg-white text-muted-foreground hover:bg-emerald-50 hover:text-ink font-medium"
-                    )}
-                  >
-                    {r.liveCount > 0 ? (
-                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                    ) : (
-                      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
-                    )}
-                    <span>Route {r.code}: {r.origin} → {r.destination}</span>
-                    {r.liveCount > 0 && (
-                      <span className={cn(
-                        "rounded-full px-1.5 py-0.2 text-[9px] font-bold uppercase",
-                        isSelected ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-800"
-                      )}>
-                        {r.liveCount} live
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+      <section className="mb-10">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="font-display text-xl sm:text-2xl font-bold text-ink flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              Live Buses on Road
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Buses currently operating across Haryana Roadways corridors
+            </p>
           </div>
-        </section>
-      )}
+
+          {liveBuses.length > 0 && (
+            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">
+              {liveBuses.length} Active Bus{liveBuses.length > 1 ? "es" : ""}
+            </span>
+          )}
+        </div>
+
+        {liveBusesQuery.loading && (
+          <p className="text-xs text-muted-foreground py-4 text-center">Checking for live buses…</p>
+        )}
+
+        {!liveBusesQuery.loading && liveBuses.length === 0 && (
+          <div className="rounded-2xl border border-border/80 bg-card p-5 text-center shadow-xs">
+            <div className="mx-auto grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700 mb-2">
+              <BusFront className="h-5 w-5" />
+            </div>
+            <h3 className="font-bold text-sm text-ink">No buses are on the road right now</h3>
+            <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+              Scheduled services are running as per timetable. Search your boarding stand above to check upcoming departures and fares.
+            </p>
+          </div>
+        )}
+
+        {liveBuses.length > 0 && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {liveBuses.map((bus) => (
+              <div
+                key={`${bus.fleetNumber}-${bus.routeId}`}
+                className="rounded-2xl border border-border/80 bg-card p-4 shadow-xs transition-all hover:border-emerald-500/50 hover:shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="inline-block rounded-md bg-emerald-100/80 px-2 py-0.5 text-[10px] font-bold text-emerald-800 uppercase">
+                      Route {bus.routeCode}
+                    </span>
+                    <h3 className="font-display text-lg font-bold text-ink mt-1">Bus {bus.fleetNumber}</h3>
+                    <p className="text-xs text-muted-foreground truncate">{bus.routeName}</p>
+                  </div>
+                  <StatusBadge status={bus.status} />
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs border-t border-border/50 pt-2.5">
+                  <div>
+                    <span className="text-muted-foreground text-[10px] block">Current Stop</span>
+                    <span className="font-semibold text-ink truncate block">{bus.currentStop ?? "Between stands"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground text-[10px] block">Next Stop</span>
+                    <span className="font-semibold text-ink truncate block">
+                      {bus.nextStop ?? "—"}
+                      {bus.etaMinutes != null ? ` (${formatEta(bus.etaMinutes)})` : ""}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between border-t border-border/50 pt-2 text-xs">
+                  <span className="text-muted-foreground">
+                    Speed: <b>{bus.speedKmph != null ? `${bus.speedKmph} km/h` : "Halted"}</b>
+                  </span>
+                  <Button variant="outline" size="sm" asChild className="rounded-full text-xs h-7 px-3">
+                    <Link to={`/track/${bus.fleetNumber}?routeId=${bus.routeId}`}>
+                      Track on Map <ArrowRight className="h-3 w-3 ml-1" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 3: LIVE ROAD MAP & PROGRESSION
+          3. CLEAN HIGHWAY CORRIDOR MAP
+          Visual road line + active buses
           ───────────────────────────────────────────────────────────── */}
-      <section className="mb-14 overflow-hidden rounded-3xl border border-border/80 bg-card shadow-sm">
+      <section className="mb-10 overflow-hidden rounded-3xl border border-border/80 bg-card shadow-xs">
         <TrackingNotice status={trackingStatus} />
 
-        <div className="flex min-h-[76px] flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-card px-5 py-3 sm:px-6">
+        {/* Route Selector Header */}
+        <div className="border-b border-border/70 bg-card px-4 py-3 sm:px-5 flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2">
-              <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-700">
-                <Navigation size={13} className="rotate-45" /> Live Road Map & Highway Projection
-              </p>
-              {activeRoute && (
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">
-                  Route {activeRoute.code} · {activeRoute.distanceKm ? `${activeRoute.distanceKm} km` : ""}
-                </span>
-              )}
+            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 uppercase">
+              <RouteIcon className="h-4 w-4" />
+              <span>Route Corridors</span>
             </div>
-            <p className="mt-1 truncate font-display text-lg sm:text-xl font-bold">
-              {mapTrip?.fleetNumber && mapTrip.fleetNumber !== "SCHED"
-                ? `Bus ${mapTrip.fleetNumber} · ${mapTrip.routeName || activeRoute?.name}`
-                : (activeRoute ? activeRoute.name : "Explore bus routes")}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Route: {mapStops.map((s) => s.name).join(" → ")}
-              {mapTrip?.nextStop ? ` · Next Stop: ${mapTrip.nextStop}` : ""}
-              {mapTrip?.etaMinutes != null ? ` · ETA: ${formatEta(mapTrip.etaMinutes)}` : ""}
+            <p className="font-display text-sm font-bold text-ink mt-0.5">
+              {activeRoute ? `Route ${activeRoute.code}: ${activeRoute.name}` : "Haryana Highway Network"}
             </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
-            {mapTrip && <StatusBadge status={mapTrip.status} />}
-            {mapTrip?.fleetNumber && mapTrip.fleetNumber !== "SCHED" ? (
-              <Button variant="outline" size="sm" asChild className="rounded-full">
-                <Link to={`/track/${mapTrip.fleetNumber}?${mapTrackQuery || ""}`}>
-                  Track in full view <ArrowRight className="h-4 w-4 ml-1" />
-                </Link>
-              </Button>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => searchFor(activeRoute?.origin || from, activeRoute?.destination || to, travelDate)} className="rounded-full">
-                View timetable <ArrowRight className="h-4 w-4 ml-1" />
-              </Button>
-            )}
+          {/* Corridor Selection Pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {routes.slice(0, 4).map((r) => {
+              const isSelected = r.id === activeRoute?.id;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedRouteId(r.id);
+                    setFrom(r.origin);
+                    setTo(r.destination);
+                  }}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-semibold transition-all cursor-pointer",
+                    isSelected
+                      ? "bg-emerald-700 text-white shadow-2xs"
+                      : "border border-border/80 bg-white text-muted-foreground hover:bg-muted hover:text-ink"
+                  )}
+                >
+                  {r.origin} ➔ {r.destination}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Map Canvas */}
-        <div className="relative min-h-[380px] sm:min-h-[460px] w-full bg-muted/40">
+        {/* Map View */}
+        <div className="relative h-[320px] sm:h-[380px] w-full bg-muted/40">
           <MapView
             path={mapPath}
             stops={mapStops}
@@ -549,332 +518,63 @@ export function HomePage() {
           />
         </div>
 
-        {/* Map Footer Info */}
+        {/* Map Summary Footer */}
         {activeRoute && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 bg-card/80 px-5 py-3 text-xs text-muted-foreground sm:px-6">
-            <div className="flex flex-wrap items-center gap-4">
-              <span><b>Depot Origin:</b> {activeRoute.origin}</span>
-              <span><b>Destination:</b> {activeRoute.destination}</span>
-              {activeRoute.distanceKm && <span><b>Highway Distance:</b> {activeRoute.distanceKm} km</span>}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-card px-4 py-2.5 text-xs text-muted-foreground sm:px-5">
+            <div className="flex items-center gap-4">
+              <span><b>From:</b> {activeRoute.origin}</span>
+              <span><b>To:</b> {activeRoute.destination}</span>
+              {activeRoute.distanceKm && <span><b>Distance:</b> {activeRoute.distanceKm} km</span>}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="font-semibold text-foreground">
-                {mapBuses.length > 0 ? `${mapBuses.length} active live bus(es)` : "Scheduled timetable active"}
-              </span>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          SECTION 4: THREE SIMPLE STEPS (HEALTHORA / DARPAN MIRROR)
-          ───────────────────────────────────────────────────────────── */}
-      <section className="mb-16">
-        <div className="text-center max-w-2xl mx-auto mb-10">
-          <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100/70 px-3.5 py-1 text-xs font-bold uppercase tracking-wider text-emerald-800">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>Effortless Commuting</span>
-          </div>
-          <h2 className="mt-3 font-display text-3xl font-extrabold sm:text-4xl text-ink">
-            Three simple steps to never wait blindly
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground sm:text-base">
-            No more standing on dusty highway stands wondering where your bus is.
-          </p>
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="group rounded-3xl border border-border/80 bg-card p-6 shadow-xs transition-all hover:-translate-y-1 hover:border-emerald-500/50 hover:shadow-lg">
-            <div className="flex items-center justify-between">
-              <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-800 transition-colors group-hover:bg-emerald-700 group-hover:text-white">
-                <MapPin className="h-6 w-6" />
-              </span>
-              <span className="font-display text-xs font-bold uppercase tracking-widest text-muted-foreground/60">
-                Step 01
-              </span>
-            </div>
-            <h3 className="mt-5 font-display text-xl font-bold text-ink">
-              Search your route or bus number
-            </h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Select your departure and arrival bus stands from 50+ depots across Haryana and Delhi NCR. Instant timetables, halts, and official fare rates.
-            </p>
-          </div>
-
-          <div className="group rounded-3xl border border-border/80 bg-card p-6 shadow-xs transition-all hover:-translate-y-1 hover:border-emerald-500/50 hover:shadow-lg">
-            <div className="flex items-center justify-between">
-              <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-800 transition-colors group-hover:bg-emerald-700 group-hover:text-white">
-                <Activity className="h-6 w-6" />
-              </span>
-              <span className="font-display text-xs font-bold uppercase tracking-widest text-muted-foreground/60">
-                Step 02
-              </span>
-            </div>
-            <h3 className="mt-5 font-display text-xl font-bold text-ink">
-              Inspect 3D Digital Twin & GPS Telemetry
-            </h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Watch your bus progress along the highway in real time. Inspect speed, satellite link, driver console, and remaining kilometers with zero guessing.
-            </p>
-          </div>
-
-          <div className="group rounded-3xl border border-border/80 bg-card p-6 shadow-xs transition-all hover:-translate-y-1 hover:border-emerald-500/50 hover:shadow-lg">
-            <div className="flex items-center justify-between">
-              <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-emerald-800 transition-colors group-hover:bg-emerald-700 group-hover:text-white">
-                <Volume2 className="h-6 w-6" />
-              </span>
-              <span className="font-display text-xs font-bold uppercase tracking-widest text-muted-foreground/60">
-                Step 03
-              </span>
-            </div>
-            <h3 className="mt-5 font-display text-xl font-bold text-ink">
-              Listen to Voice Alerts & Track Offline
-            </h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Get spoken stop announcements in Hindi and English. Even when the cellular signal drops in rural areas, cached PWA timetables keep you informed.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          SECTION 5: HOW BUS TRACKING WORKS (TECH PIPELINE EXPLAINER)
-          ───────────────────────────────────────────────────────────── */}
-      <section className="mb-16 rounded-3xl border border-emerald-200/80 bg-gradient-to-br from-emerald-950 via-emerald-900 to-teal-950 p-6 sm:p-10 text-white shadow-xl">
-        <div className="max-w-2xl">
-          <span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-emerald-300">
-            <Radio className="h-3.5 w-3.5" /> High-Throughput Telemetry Pipeline
-          </span>
-          <h2 className="mt-2 font-display text-3xl font-extrabold sm:text-4xl text-white">
-            How bus tracking actually works under the hood
-          </h2>
-          <p className="mt-3 text-sm leading-relaxed text-emerald-100/80 sm:text-base">
-            From vehicle hardware to commuter browser: four synchronized layers processing thousands of data points every second.
-          </p>
-        </div>
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4.5 backdrop-blur-sm">
-            <span className="font-mono text-xs font-bold text-emerald-400">01 · Hardware</span>
-            <h4 className="mt-1 font-display text-base font-bold text-white">On-Bus GPS Unit</h4>
-            <p className="mt-1 text-xs leading-relaxed text-emerald-200/70">
-              High-sensitivity NavIC/GPS receivers broadcast coordinates, heading, and speed over 4G every 3 seconds.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4.5 backdrop-blur-sm">
-            <span className="font-mono text-xs font-bold text-emerald-400">02 · Backend API</span>
-            <h4 className="mt-1 font-display text-base font-bold text-white">.NET 8 Concurrent Engine</h4>
-            <p className="mt-1 text-xs leading-relaxed text-emerald-200/70">
-              OutOfProcess Kestrel handles thread-safe telemetry ingestion, rate-limiting, and SQL spatial updates.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4.5 backdrop-blur-sm">
-            <span className="font-mono text-xs font-bold text-emerald-400">03 · Routing</span>
-            <h4 className="mt-1 font-display text-base font-bold text-white">OSRM Road-Snapping</h4>
-            <p className="mt-1 text-xs leading-relaxed text-emerald-200/70">
-              Raw wandering coordinates are snapped to actual OpenStreetMap highway curvature without jagged jumps.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4.5 backdrop-blur-sm">
-            <span className="font-mono text-xs font-bold text-emerald-400">04 · Delivery</span>
-            <h4 className="mt-1 font-display text-base font-bold text-white">SignalR & 3D UI</h4>
-            <p className="mt-1 text-xs leading-relaxed text-emerald-200/70">
-              Persistent WebSocket channels push telemetry directly to the commuter's 3D twin with 18ms latency.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          SECTION 6: ACTIVE BUSES ON THE ROAD (REAL-TIME FLEET CARDS)
-          ───────────────────────────────────────────────────────────── */}
-      <section className="mb-16">
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-              Real-Time Fleet Status
-            </p>
-            <h2 className="mt-1 font-display text-3xl font-extrabold text-ink sm:text-4xl">
-              Buses currently on the road
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Live location, upcoming halt, and on-time status.
-            </p>
-          </div>
-          <span className="flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-3.5 py-1 text-xs font-bold text-emerald-800">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Live SignalR Streaming</span>
-          </span>
-        </div>
-
-        {liveBusesQuery.loading && (
-          <p className="text-sm text-muted-foreground">Checking live bus telemetry…</p>
-        )}
-        {liveBusesQuery.error && (
-          <p className="text-sm text-destructive">{liveBusesQuery.error}</p>
-        )}
-        {liveUpdatesError && (
-          <p className="text-sm text-amber-600 mb-3">{liveUpdatesError}</p>
-        )}
-
-        {!liveBusesQuery.loading && !liveBusesQuery.error && liveBuses.length === 0 && (
-          <div className="flex flex-col gap-4 rounded-3xl border border-border/80 bg-card p-6 shadow-xs sm:flex-row sm:items-center sm:p-8">
-            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-emerald-100 text-emerald-800">
-              <BusFront size={28} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h3 className="font-bold text-lg text-ink">No buses are running right now</h3>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                Scheduled departures are still available across all corridors. Search your stops to check timetables and fares.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              className="shrink-0 rounded-full"
-              onClick={() => document.getElementById("journey-search")?.scrollIntoView({ behavior: "smooth" })}
+            <Link
+              to={`/track/${mapTrip?.fleetNumber ?? "SCHED"}?${mapTrackQuery || ""}`}
+              className="text-emerald-700 font-semibold hover:underline inline-flex items-center gap-1"
             >
-              Search schedules <ArrowRight size={16} className="ml-1" />
-            </Button>
-          </div>
-        )}
-
-        {liveBuses.length > 0 && (
-          <div className="grid gap-4 md:grid-cols-2">
-            {liveBuses.map((busUpdate) => (
-              <article
-                key={`${busUpdate.fleetNumber}-${busUpdate.routeId}`}
-                className="rounded-3xl border border-border/80 bg-card p-6 shadow-xs transition-all hover:border-emerald-500/50 hover:shadow-md"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      {busUpdate.operatorName} · Route {busUpdate.routeCode}
-                    </span>
-                    <h3 className="mt-1 font-display text-2xl font-bold">Bus {busUpdate.fleetNumber}</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {busUpdate.registrationNumber} · {busUpdate.routeName}
-                    </p>
-                  </div>
-                  <StatusBadge status={busUpdate.status} />
-                </div>
-
-                <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-2.5">
-                    <dt className="text-xs text-muted-foreground">Current Halt</dt>
-                    <dd className="font-bold text-ink mt-0.5">{busUpdate.currentStop ?? "Between stops"}</dd>
-                  </div>
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-2.5">
-                    <dt className="text-xs text-muted-foreground">Next Halt</dt>
-                    <dd className="font-bold text-ink mt-0.5">
-                      {busUpdate.nextStop ?? "—"}
-                      {busUpdate.etaMinutes != null ? ` · ${formatEta(busUpdate.etaMinutes)}` : ""}
-                    </dd>
-                  </div>
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-2.5">
-                    <dt className="text-xs text-muted-foreground">Schedule Variance</dt>
-                    <dd className="font-bold text-emerald-700 mt-0.5">
-                      {busUpdate.outsideSlot
-                        ? "Special service"
-                        : busUpdate.delayMinutes != null && busUpdate.delayMinutes > 2
-                          ? `+${busUpdate.delayMinutes} min delay`
-                          : "On time"}
-                    </dd>
-                  </div>
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-2.5">
-                    <dt className="text-xs text-muted-foreground">Last Ping</dt>
-                    <dd className="font-bold text-ink mt-0.5">{ago(busUpdate.recordedAt)}</dd>
-                  </div>
-                </dl>
-
-                <div className="mt-4 flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground font-mono">
-                    Speed: {busUpdate.speedKmph != null ? `${busUpdate.speedKmph} km/h` : "Stationary"}
-                  </span>
-                  <Button variant="outline" size="sm" asChild className="rounded-full">
-                    <Link to={`/track/${busUpdate.fleetNumber}?routeId=${busUpdate.routeId}`}>
-                      Track on map <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                    </Link>
-                  </Button>
-                </div>
-              </article>
-            ))}
+              Full Route Details <ArrowRight className="h-3 w-3" />
+            </Link>
           </div>
         )}
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 7: ACCORDION FAQS (MATCHING DARPAN / HEALTHORA)
+          4. SIMPLE 3-STEP GUIDE
+          Clean, human, practical
           ───────────────────────────────────────────────────────────── */}
-      <section className="mb-16">
-        <div className="text-center max-w-2xl mx-auto mb-8">
-          <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100/70 px-3.5 py-1 text-xs font-bold uppercase tracking-wider text-emerald-800">
-            <HelpCircle className="h-3.5 w-3.5" />
-            <span>Got Questions?</span>
+      <section className="mb-10 text-center">
+        <h2 className="font-display text-xl font-bold text-ink">How to track in 3 easy steps</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3 text-left">
+          <div className="rounded-2xl border border-border/80 bg-card p-4 shadow-2xs">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold mb-2">1</span>
+            <h3 className="font-bold text-sm text-ink">Select your bus stands</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Pick your departure and destination to see all direct and connecting buses.</p>
           </div>
-          <h2 className="mt-3 font-display text-3xl font-extrabold sm:text-4xl text-ink">
-            Frequently asked questions
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Everything you need to know about live bus tracking across Haryana.
-          </p>
-        </div>
 
-        <div className="mx-auto max-w-3xl space-y-3">
-          {FAQS.map((faq, idx) => {
-            const isOpen = openFaqIndex === idx;
-            return (
-              <div
-                key={idx}
-                className="overflow-hidden rounded-2xl border border-border/80 bg-card transition-colors hover:border-emerald-300"
-              >
-                <button
-                  type="button"
-                  onClick={() => setOpenFaqIndex(isOpen ? null : idx)}
-                  className="flex w-full items-center justify-between gap-4 p-5 text-left font-display text-base font-bold text-ink"
-                >
-                  <span>{faq.q}</span>
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted/60 text-muted-foreground">
-                    {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </span>
-                </button>
-                {isOpen && (
-                  <div className="border-t border-border/60 px-5 pb-5 pt-3 text-sm leading-relaxed text-muted-foreground">
-                    {faq.a}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          <div className="rounded-2xl border border-border/80 bg-card p-4 shadow-2xs">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold mb-2">2</span>
+            <h3 className="font-bold text-sm text-ink">Check live bus location</h3>
+            <p className="mt-1 text-xs text-muted-foreground">See the bus moving on the highway with live speed, delays, and next stop ETA.</p>
+          </div>
+
+          <div className="rounded-2xl border border-border/80 bg-card p-4 shadow-2xs">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold mb-2">3</span>
+            <h3 className="font-bold text-sm text-ink">Reach the stand on time</h3>
+            <p className="mt-1 text-xs text-muted-foreground">No more long, blind waits on dusty highway stands. Board calmly and travel safe.</p>
+          </div>
         </div>
       </section>
 
       {/* ─────────────────────────────────────────────────────────────
-          SECTION 8: BOTTOM CTA BANNER (DARPAN STYLE)
+          5. QUICK BUS STAND HELPLINES
           ───────────────────────────────────────────────────────────── */}
-      <section className="rounded-3xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 p-8 text-center sm:p-12 shadow-sm">
-        <h2 className="font-display text-3xl font-extrabold sm:text-4xl text-emerald-950">
-          Ready to catch your next bus?
-        </h2>
-        <p className="mt-2 max-w-xl mx-auto text-sm text-muted-foreground sm:text-base">
-          Start planning your journey now, check official depot contact numbers, or install our lightweight PWA for offline access.
+      <section className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 text-center sm:p-6">
+        <h2 className="font-display text-lg font-bold text-emerald-950">Need bus stand enquiry numbers?</h2>
+        <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+          Official contact numbers for Haryana Roadways counters at Fatehabad, Hisar, Sirsa, Delhi ISBT, Rohtak, and Chandigarh.
         </p>
-
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <Button
-            size="lg"
-            className="rounded-full bg-emerald-700 px-6 font-bold text-white hover:bg-emerald-800"
-            onClick={() => document.getElementById("journey-search")?.scrollIntoView({ behavior: "smooth" })}
-          >
-            <Search className="h-4 w-4 mr-1.5" /> Plan a Journey
-          </Button>
-
-          <Button variant="outline" size="lg" className="rounded-full" asChild>
+        <div className="mt-3 flex justify-center">
+          <Button variant="outline" size="sm" asChild className="rounded-full bg-white text-xs">
             <Link to="/enquiry-numbers">
-              <Phone className="h-4 w-4 mr-1.5 text-emerald-700" /> Bus Stand Enquiry Numbers
+              <Phone className="h-3.5 w-3.5 mr-1.5 text-emerald-700" /> View All Bus Stand Numbers
             </Link>
           </Button>
         </div>
@@ -958,11 +658,11 @@ function StopField({
   return (
     <div
       ref={fieldRef}
-      className="relative flex min-h-[72px] min-w-0 items-center gap-3 rounded-2xl border border-border/80 bg-background/50 px-3.5 py-2.5 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15"
+      className="relative flex min-h-[66px] min-w-0 items-center gap-2.5 rounded-2xl border border-border/80 bg-background/50 px-3 py-2 transition-colors focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15"
     >
       <Icon className="h-5 w-5 shrink-0 text-emerald-700" />
       <div className="grid min-w-0 flex-1 gap-0.5">
-        <label htmlFor={id} className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <label htmlFor={id} className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </label>
         <input
@@ -974,9 +674,9 @@ function StopField({
           aria-expanded={open}
           aria-controls={`${id}-suggestions`}
           aria-activedescendant={open && suggestions[activeIndex] ? `${id}-option-${suggestions[activeIndex].id}` : undefined}
-          placeholder="Search bus stand, city..."
+          placeholder="Type city or bus stand..."
           aria-busy={loading}
-          className="h-7 w-full border-0 bg-transparent p-0 text-sm font-bold text-ink outline-none placeholder:font-normal placeholder:text-muted-foreground"
+          className="h-6 w-full border-0 bg-transparent p-0 text-xs font-bold text-ink outline-none placeholder:font-normal placeholder:text-muted-foreground"
           value={inputValue}
           onFocus={() => {
             setOpen(true);
@@ -996,7 +696,7 @@ function StopField({
         <button
           type="button"
           aria-label={`Clear ${label.toLocaleLowerCase()} search`}
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-ink"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-ink cursor-pointer"
           onClick={() => {
             setInputValue("");
             onChange("");
@@ -1007,24 +707,24 @@ function StopField({
           <X className="h-3.5 w-3.5" />
         </button>
       ) : (
-        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       )}
 
       {open && (
         <div
           id={`${id}-suggestions`}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-2xl border border-border/80 bg-card p-3 shadow-xl"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-72 overflow-y-auto rounded-2xl border border-border/80 bg-card p-2 shadow-xl"
         >
-          <h3 className="px-2 pb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          <h3 className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             {loading
-              ? "Loading stops…"
+              ? "Loading stands…"
               : searchText
-                ? `Search results for “${inputValue.trim()}”`
+                ? `Results for “${inputValue.trim()}”`
                 : "Popular Bus Stands"}
           </h3>
           {loading ? (
-            <p className="rounded-lg p-3 text-sm text-muted-foreground">Loading stops…</p>
+            <p className="p-3 text-xs text-muted-foreground">Loading bus stands…</p>
           ) : suggestions.length ? (
             suggestions.map((stop, index) => (
               <button
@@ -1034,17 +734,17 @@ function StopField({
                 role="option"
                 aria-selected={stop.name === value}
                 className={cn(
-                  "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-emerald-50",
+                  "flex w-full items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-emerald-50 cursor-pointer",
                   index === activeIndex ? "bg-emerald-50 text-emerald-900 font-semibold" : ""
                 )}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectStop(stop)}
               >
-                <span className="flex min-w-0 items-start gap-2.5">
-                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+                <span className="flex min-w-0 items-start gap-2">
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-700" />
                   <span className="min-w-0">
                     <span className="block font-medium text-ink">{stop.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
+                    <span className="block truncate text-[10px] text-muted-foreground">
                       {!searchText && popularNameSet.has(stop.name.toLocaleLowerCase())
                         ? "Depot stand"
                         : [stop.city, stop.address, stop.code].filter(Boolean).join(" · ")}
@@ -1055,9 +755,9 @@ function StopField({
               </button>
             ))
           ) : (
-            <div className="p-4 text-center">
-              <p className="text-sm font-medium text-ink">No bus stands found</p>
-              <p className="mt-1 text-xs text-muted-foreground">Try typing another city name.</p>
+            <div className="p-3 text-center">
+              <p className="text-xs font-medium text-ink">No bus stands found</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">Try another city or spelling.</p>
             </div>
           )}
         </div>
