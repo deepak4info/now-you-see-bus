@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PwaBanner, InstallAppButton } from "./PwaBanner";
-import { SoundToggle } from "./SoundToggle";
 
 const VISITOR_ID_KEY = "wimb_visitor_id";
 
@@ -52,7 +51,6 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="font-display text-xl leading-none">Where is my bus</span>
           </Link>
           <InstallAppButton className="hidden sm:inline-flex" />
-          <SoundToggle className="hidden sm:grid" />
           <nav className="ml-auto hidden items-center gap-1 md:flex">
             {links.map((link) => (
               <NavLink
@@ -94,9 +92,8 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
         {open && (
           <div className="space-y-1 border-t px-4 py-3 md:hidden">
-            <div className="flex items-center gap-2 pb-2">
-              <InstallAppButton className="flex-1 justify-center py-2" />
-              <SoundToggle />
+            <div className="pb-2">
+              <InstallAppButton className="w-full justify-center py-2" />
             </div>
             {links.map((link) => (
               <Link key={link.to} to={link.to} className="block rounded-md px-2 py-2" onClick={() => setOpen(false)}>

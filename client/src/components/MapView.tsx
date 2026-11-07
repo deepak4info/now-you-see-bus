@@ -146,16 +146,9 @@ export function MapView({
     const timer = window.setTimeout(() => {
       if (alive) map.invalidateSize();
     }, 200);
-
-    const resizeObs = new ResizeObserver(() => {
-      if (alive && map) map.invalidateSize();
-    });
-    if (el.current) resizeObs.observe(el.current);
-
     return () => {
       alive = false;
       window.clearTimeout(timer);
-      resizeObs.disconnect();
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
