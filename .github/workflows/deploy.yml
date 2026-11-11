@@ -7,64 +7,64 @@ on:
 
 jobs:
   build-test-and-deploy:
-    name: 🚀 Build, Test & Deploy
+    name:  Build, Test & Deploy
     runs-on: windows-latest
 
     steps:
-      - name: 📥 Checkout Repository
+      - name:  Checkout Repository
         uses: actions/checkout@v4
 
-      - name: ⚙️ Setup .NET 8 SDK
+      - name:  Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: ⚙️ Setup Node.js 20
+      - name:  Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: client/package-lock.json
 
-      - name: ⚙️ Setup Python 3
+      - name:  Setup Python 3
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 📦 Build Frontend (PWA Client)
+      - name:  Build Frontend (PWA Client)
         shell: bash
         run: |
           cd client
           npm ci
           npm run build
 
-      - name: 📁 Embed Frontend Assets into API wwwroot
+      - name:  Embed Frontend Assets into API wwwroot
         shell: bash
         run: |
           mkdir -p src/BusTrack.Api/wwwroot
           rm -rf src/BusTrack.Api/wwwroot/*
           cp -r client/dist/* src/BusTrack.Api/wwwroot/
 
-      - name: 🧪 Run Automated Unit & Anomaly Tests
+      - name:  Run Automated Unit & Anomaly Tests
         shell: bash
         run: |
           dotnet test tests/BusTrack.Api.Tests/BusTrack.Api.Tests.csproj -c Release --verbosity normal
 
-      - name: 🔨 Publish Backend (.NET 8 Release)
+      - name:  Publish Backend (.NET 8 Release)
         shell: bash
         run: |
           dotnet publish src/BusTrack.Api/BusTrack.Api.csproj -c Release -o ./publish
           # Provide app_offline template in publish folder
           cp src/BusTrack.Api/app_offline.htm ./publish/app_offline.htm.deploy 2>/dev/null || true
 
-      - name: 💾 Archive Publish Artifact (Downloadable Backup)
+      - name: Archive Publish Artifact (Downloadable Backup)
         uses: actions/upload-artifact@v4
         with:
           name: bus-track-production-release
           path: ./publish
           retention-days: 14
 
-      - name: 🌐 Deploy to SmarterASP.NET (Web Deploy with Zero-Lock Fallback)
+      - name:  Deploy to SmarterASP.NET (Web Deploy with Zero-Lock Fallback)
         if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
@@ -82,7 +82,7 @@ jobs:
 
           if ([string]::IsNullOrWhiteSpace($password)) {
             Write-Host "::error::No deployment password configured in GitHub Secrets!"
-            Write-Host "👉 Please configure 'SERVER_PASSWORD' or 'SMARTERASP_FTP_PASSWORD' in your repository secrets."
+            Write-Host " Please configure 'SERVER_PASSWORD' or 'SMARTERASP_FTP_PASSWORD' in your repository secrets."
             Write-Host "   (Settings -> Secrets and variables -> Actions -> New repository secret)"
             Write-Host "   NOTE: Your SmarterASP password is [Same as Control Panel]!"
             exit 1
@@ -98,7 +98,7 @@ jobs:
           $deploySucceeded = $false
 
           if ($msdeploy) {
-            Write-Host "🚀 Strategy 1: Attempting Web Deploy (MSDeploy)..."
+            Write-Host " Strategy 1: Attempting Web Deploy (MSDeploy)..."
             Write-Host "   Target Site: $site"
             Write-Host "   Target Server: $server"
             Write-Host "   User: $username"
@@ -113,20 +113,20 @@ jobs:
                 -enableRule:DoNotDeleteRule
 
               if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Web Deploy succeeded cleanly!"
+                Write-Host " Web Deploy succeeded cleanly!"
                 $deploySucceeded = $true
               } else {
-                Write-Host "⚠️ Web Deploy exited with code $LASTEXITCODE. Falling back to zero-lock FTP..."
+                Write-Host " Web Deploy exited with code $LASTEXITCODE. Falling back to zero-lock FTP..."
               }
             } catch {
-              Write-Host "⚠️ Web Deploy encountered an issue: $_. Falling back to zero-lock FTP..."
+              Write-Host " Web Deploy encountered an issue: $_. Falling back to zero-lock FTP..."
             }
           } else {
-            Write-Host "ℹ️ msdeploy.exe not found on runner path. Using zero-lock FTP deploy..."
+            Write-Host "ℹ msdeploy.exe not found on runner path. Using zero-lock FTP deploy..."
           }
 
           if (-not $deploySucceeded) {
-            Write-Host "📡 Strategy 2: Executing Zero-Lock FTP deployment..."
+            Write-Host " Strategy 2: Executing Zero-Lock FTP deployment..."
             python scripts/deploy-ftp.py "$publishFolder"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "::error::Both Web Deploy and FTP deployments failed. Please verify credentials."
@@ -134,4 +134,4 @@ jobs:
             }
           }
 
-          Write-Host "🎉 BACKEND DEPLOYMENT COMPLETED SUCCESSFULLY!"
+          Write-Host "BACKEND DEPLOYMENT COMPLETED SUCCESSFULLY!"

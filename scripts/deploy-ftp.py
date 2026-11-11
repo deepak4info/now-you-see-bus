@@ -5,6 +5,11 @@ import time
 import io
 import ftplib
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 server = os.environ.get("SMARTERASP_FTP_SERVER") or os.environ.get("FTP_SERVER") or "win8080.site4now.net"
 username = os.environ.get("SMARTERASP_FTP_USER") or os.environ.get("SERVER_USERNAME") or "fatehabad4info-001"
 password = (
