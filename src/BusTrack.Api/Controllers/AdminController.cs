@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.RegularExpressions;
 using BusTrack.Api.Auth;
 using BusRoute = BusTrack.Api.Data.Route;
@@ -7,6 +8,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace BusTrack.Api.Controllers;
 
@@ -791,10 +793,11 @@ public class AdminController : ControllerBase
     }
 
     [HttpPost("routes")]
-    public async Task<IActionResult> CreateRoute(RouteRequest request, CancellationToken ct)
+    public async Task<IActionResult> CreateRoute([FromBody] RouteRequest request, CancellationToken ct)
     {
         var error = await ValidateRoute(request, null, ct);
         if (error is not null) return BadRequest(new { message = error });
+
         var route = new BusRoute
         {
             Code = request.Code.Trim(),
@@ -803,29 +806,81 @@ public class AdminController : ControllerBase
             DistanceMode = request.DistanceMode.Trim(),
             IsActive = true
         };
-        _db.Routes.Add(route);
-        await _db.SaveChangesAsync(ct);
-        await ReplaceStops(route.Id, request, ct);
-        await _geometry.RebuildAsync(route.Id, ct);
-        await _tracking.Audit(User.Id(), "Create", "Route", route.Id.ToString(), route.Code, ct);
-        return Ok(new { route.Id });
+
+        return await PersistRouteAsync(route, request, isCreate: true, ct);
     }
 
     [HttpPut("routes/{id:int}")]
-    public async Task<IActionResult> UpdateRoute(int id, RouteRequest request, CancellationToken ct)
+    public async Task<IActionResult> UpdateRoute(int id, [FromBody] RouteRequest request, CancellationToken ct)
     {
         var route = await _db.Routes.FirstOrDefaultAsync(r => r.Id == id && r.IsActive, ct);
         if (route is null) return NotFound(new { message = "Route not found." });
+
         var error = await ValidateRoute(request, id, ct);
         if (error is not null) return BadRequest(new { message = error });
+
         route.Code = request.Code.Trim();
         route.Name = request.Name.Trim();
         route.OperatorId = request.OperatorId;
         route.DistanceMode = request.DistanceMode.Trim();
-        await _db.SaveChangesAsync(ct);
-        await ReplaceStops(route.Id, request, ct);
-        await _geometry.RebuildAsync(route.Id, ct);
-        return Ok(new { route.Id });
+
+        return await PersistRouteAsync(route, request, isCreate: false, ct);
+    }
+
+    private async Task<IActionResult> PersistRouteAsync(BusRoute route, RouteRequest request, bool isCreate, CancellationToken ct)
+    {
+        IDbContextTransaction? tx = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
+        try
+        {
+            if (isCreate)
+                _db.Routes.Add(route);
+
+            await _db.SaveChangesAsync(ct);
+            await ReplaceStops(route.Id, request, ct);
+            await _geometry.RebuildAsync(route.Id, ct);
+
+            if (isCreate)
+                await _tracking.Audit(TryCurrentUserId(), "Create", "Route", route.Id.ToString(), route.Code, ct);
+
+            if (tx is not null)
+                await tx.CommitAsync(ct);
+
+            return Ok(new { route.Id });
+        }
+        catch (DbUpdateException ex)
+        {
+            if (tx is not null)
+                await tx.RollbackAsync(CancellationToken.None);
+
+            var detail = ex.InnerException?.Message ?? ex.Message;
+            if (detail.Contains("UQ_Routes_Code", StringComparison.OrdinalIgnoreCase) ||
+                detail.Contains("duplicate key", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "That route code is already used." });
+            }
+            if (detail.Contains("FK_Routes_Operators", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Choose an active operator." });
+            }
+            if (detail.Contains("truncated", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Route code or name exceeds maximum allowed length." });
+            }
+            throw;
+        }
+        finally
+        {
+            if (tx is not null)
+                await tx.DisposeAsync();
+        }
+    }
+
+    private Guid? TryCurrentUserId()
+    {
+        var raw = User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        return Guid.TryParse(raw, out var id) ? id : null;
     }
 
     [HttpPut("routes/{id:int}/fares")]
@@ -898,6 +953,20 @@ public class AdminController : ControllerBase
         if (request?.Ids == null || request.Ids.Count == 0)
             return BadRequest(new { message = "No route IDs provided." });
 
+        if (request.OperatorId.HasValue && request.OperatorId.Value > 0
+            && !await _db.Operators.AnyAsync(o => o.Id == request.OperatorId.Value && o.IsActive, ct))
+        {
+            return BadRequest(new { message = "Choose an active operator." });
+        }
+
+        string? nextMode = null;
+        if (!string.IsNullOrWhiteSpace(request.DistanceMode))
+        {
+            nextMode = request.DistanceMode.Trim();
+            if (nextMode is not ("Auto" or "Manual"))
+                return BadRequest(new { message = "Choose automatic or manual distance calculation." });
+        }
+
         var routes = await _db.Routes.Where(r => request.Ids.Contains(r.Id) && r.IsActive).ToListAsync(ct);
         var updated = 0;
 
@@ -909,16 +978,16 @@ public class AdminController : ControllerBase
                 r.OperatorId = request.OperatorId.Value;
                 modified = true;
             }
-            if (!string.IsNullOrWhiteSpace(request.DistanceMode))
+            if (nextMode is not null)
             {
-                r.DistanceMode = request.DistanceMode.Trim();
+                r.DistanceMode = nextMode;
                 modified = true;
             }
             if (modified) updated++;
         }
 
         await _db.SaveChangesAsync(ct);
-        await _tracking.Audit(User.Id(), "BulkUpdate", "Route", string.Join(",", request.Ids), $"Updated {updated} routes", ct);
+        await _tracking.Audit(TryCurrentUserId(), "BulkUpdate", "Route", string.Join(",", request.Ids), $"Updated {updated} routes", ct);
         return Ok(new BulkOperationResult(updated, routes.Count - updated, $"Updated {updated} route(s)."));
     }
 
@@ -1144,23 +1213,47 @@ public class AdminController : ControllerBase
         return null;
     }
 
-    private async Task<string?> ValidateRoute(RouteRequest request, int? id, CancellationToken ct)
+    private async Task<string?> ValidateRoute(RouteRequest? request, int? id, CancellationToken ct)
     {
-        if (request.Code.Trim().Length == 0) return "Enter a route code.";
-        if (request.Name.Trim().Length < 2) return "Enter a route name.";
-        if (request.StopIds.Count < 2) return "A route needs at least two stops.";
-        if (request.StopIds.Distinct().Count() != request.StopIds.Count) return "Each stop can appear once.";
-        if (request.DistanceMode is not ("Auto" or "Manual")) return "Choose automatic or manual distance calculation.";
-        if (request.DistanceMode == "Manual"
-            && (request.SegmentDistancesKm is null
-                || request.SegmentDistancesKm.Count != request.StopIds.Count - 1
-                || request.SegmentDistancesKm.Any(distance => !double.IsFinite(distance) || distance < 0.01 || distance > 999999.99)))
-            return "Enter a valid distance of at least 0.01 km for every leg between stops.";
-        var found = await _db.Stops.CountAsync(s => s.IsActive && request.StopIds.Contains(s.Id), ct);
-        if (found != request.StopIds.Count) return "One of those stops is not available.";
-        var code = request.Code.Trim();
-        if (await _db.Routes.AnyAsync(r => r.Code == code && r.Id != id, ct))
+        if (request is null) return "Enter the route details.";
+
+        var code = (request.Code ?? "").Trim();
+        var name = (request.Name ?? "").Trim();
+        var distanceMode = (request.DistanceMode ?? "").Trim();
+        var stopIds = request.StopIds;
+
+        if (code.Length == 0) return "Enter a route code.";
+        if (code.Length > 20) return "Route code must be 20 characters or fewer.";
+        if (name.Length < 2) return "Enter a route name.";
+        if (name.Length > 150) return "Route name must be 150 characters or fewer.";
+
+        if (request.OperatorId is int opId &&
+            (opId <= 0 || !await _db.Operators.AnyAsync(o => o.Id == opId && o.IsActive, ct)))
+        {
+            return "Choose an active operator.";
+        }
+
+        if (stopIds is null || stopIds.Count < 2) return "A route needs at least two stops.";
+        if (stopIds.Distinct().Count() != stopIds.Count) return "Each stop can appear once.";
+        if (distanceMode is not ("Auto" or "Manual")) return "Choose automatic or manual distance calculation.";
+        if (distanceMode == "Manual")
+        {
+            if (request.SegmentDistancesKm is null
+                || request.SegmentDistancesKm.Count != stopIds.Count - 1
+                || request.SegmentDistancesKm.Any(distance => !double.IsFinite(distance) || distance < 0.01 || distance > 999999.99))
+            {
+                return "Enter a valid distance of at least 0.01 km for every leg between stops.";
+            }
+            if (request.SegmentDistancesKm.Sum() > 999999.99)
+                return "Total route distance cannot exceed 999,999.99 km.";
+        }
+
+        var found = await _db.Stops.CountAsync(s => s.IsActive && stopIds.Contains(s.Id), ct);
+        if (found != stopIds.Count) return "One of those stops is not available.";
+
+        if (await _db.Routes.AnyAsync(r => r.Code.ToLower() == code.ToLower() && r.Id != id, ct))
             return "That route code is already used.";
+
         return null;
     }
 

@@ -24,12 +24,14 @@ public sealed class RoadRouter
 
     private async Task<(double[] LegKm, List<LatLng> Points)?> TryFetchFullRouteAsync(IReadOnlyList<LatLng> stops, CancellationToken ct)
     {
+        if (ct.IsCancellationRequested) return null;
+
         var coords = string.Join(';', stops.Select(stop =>
             $"{stop.Lng.ToString("F6", CultureInfo.InvariantCulture)},{stop.Lat.ToString("F6", CultureInfo.InvariantCulture)}"));
 
         var relativeUrl = $"route/v1/driving/{coords}?overview=full&geometries=geojson";
         var primaryResult = await FetchOsrmRouteAsync(relativeUrl, stops.Count - 1, ct);
-        if (primaryResult is not null) return primaryResult;
+        if (primaryResult is not null || ct.IsCancellationRequested) return primaryResult;
 
         var secondaryUrl = $"{SecondaryBase}route/v1/driving/{coords}?overview=full&geometries=geojson";
         return await FetchOsrmRouteAsync(secondaryUrl, stops.Count - 1, ct);
@@ -37,6 +39,8 @@ public sealed class RoadRouter
 
     private async Task<(double[] LegKm, List<LatLng> Points)?> FetchOsrmRouteAsync(string url, int expectedLegs, CancellationToken ct)
     {
+        if (ct.IsCancellationRequested) return null;
+
         try
         {
             using var response = await _http.GetAsync(url, ct);
@@ -102,8 +106,11 @@ public sealed class RoadRouter
             var legCoords = $"{from.Lng.ToString("F6", CultureInfo.InvariantCulture)},{from.Lat.ToString("F6", CultureInfo.InvariantCulture)};" +
                             $"{to.Lng.ToString("F6", CultureInfo.InvariantCulture)},{to.Lat.ToString("F6", CultureInfo.InvariantCulture)}";
 
-            var legResult = await FetchOsrmRouteAsync($"route/v1/driving/{legCoords}?overview=full&geometries=geojson", 1, ct)
-                         ?? await FetchOsrmRouteAsync($"{SecondaryBase}route/v1/driving/{legCoords}?overview=full&geometries=geojson", 1, ct);
+            var legResult = ct.IsCancellationRequested
+                ? null
+                : await FetchOsrmRouteAsync($"route/v1/driving/{legCoords}?overview=full&geometries=geojson", 1, ct);
+            if (legResult is null && !ct.IsCancellationRequested)
+                legResult = await FetchOsrmRouteAsync($"{SecondaryBase}route/v1/driving/{legCoords}?overview=full&geometries=geojson", 1, ct);
 
             if (legResult is not null && legResult.Value.Points.Count >= 2)
             {

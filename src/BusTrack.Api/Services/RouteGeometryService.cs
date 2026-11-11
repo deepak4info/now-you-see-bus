@@ -23,6 +23,9 @@ public class RouteGeometryService
 
     public Task<int> RebuildAutoRoutesAsync(CancellationToken ct = default) => RebuildAllRoutesAsync(ct);
 
+    private const int MaxRoutePoints = 1500;
+    private static readonly TimeSpan OsrmLookupTimeout = TimeSpan.FromSeconds(8);
+
     public async Task RebuildAsync(int routeId, CancellationToken ct = default)
     {
         var route = await _db.Routes.FirstAsync(r => r.Id == routeId, ct);
@@ -36,7 +39,9 @@ public class RouteGeometryService
         if (stops.Count >= 2)
         {
             var waypoints = stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList();
-            try { road = await _roads.DriveAsync(waypoints, ct); }
+            using var osrmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            osrmCts.CancelAfter(OsrmLookupTimeout);
+            try { road = await _roads.DriveAsync(waypoints, osrmCts.Token); }
             catch (Exception) { road = null; }
         }
 
@@ -74,25 +79,39 @@ public class RouteGeometryService
                     acc += Geo.HaversineKm((double)prev.Latitude, (double)prev.Longitude, (double)cur.Latitude, (double)cur.Longitude);
                 }
             }
-            stops[i].DistanceFromOriginKm = Math.Round((decimal)acc, 2);
+            stops[i].DistanceFromOriginKm = ClampDistance(acc);
         }
-        route.DistanceKm = stops.Count == 0 ? 0 : Math.Round((decimal)acc, 2);
+        route.DistanceKm = stops.Count == 0 ? 0 : ClampDistance(acc);
 
-        var existingPoints = await _db.RoutePoints.Where(p => p.RouteId == routeId).ToListAsync(ct);
-        _db.RoutePoints.RemoveRange(existingPoints);
+        // Persist/delete old points before inserting SequenceNo = 1..N so SQL UQ_RoutePoints_Sequence never conflicts
+        if (_db.Database.IsRelational())
+        {
+            await _db.RoutePoints.Where(p => p.RouteId == routeId).ExecuteDeleteAsync(ct);
+        }
+        else
+        {
+            var existingPoints = await _db.RoutePoints.Where(p => p.RouteId == routeId).ToListAsync(ct);
+            if (existingPoints.Count > 0)
+            {
+                _db.RoutePoints.RemoveRange(existingPoints);
+                await _db.SaveChangesAsync(ct);
+            }
+        }
 
-        var dense = road is not null && road.Value.Points.Count >= 2
+        var rawDense = road is not null && road.Value.Points.Count >= 2
             ? road.Value.Points
             : Geo.Densify(stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList());
+        var dense = DownsamplePoints(rawDense, MaxRoutePoints);
         var seq = 1;
         foreach (var point in dense)
         {
+            if (!double.IsFinite(point.Lat) || !double.IsFinite(point.Lng)) continue;
             _db.RoutePoints.Add(new RoutePoint
             {
                 RouteId = routeId,
                 SequenceNo = seq++,
-                Latitude = Math.Round((decimal)point.Lat, 6),
-                Longitude = Math.Round((decimal)point.Lng, 6)
+                Latitude = Math.Clamp(Math.Round((decimal)point.Lat, 6), -90m, 90m),
+                Longitude = Math.Clamp(Math.Round((decimal)point.Lng, 6), -180m, 180m)
             });
         }
 
@@ -121,5 +140,24 @@ public class RouteGeometryService
             _db.FareSlabs.Remove(fare);
 
         await _db.SaveChangesAsync(ct);
+    }
+
+    private static decimal ClampDistance(double km)
+    {
+        if (!double.IsFinite(km) || km <= 0) return 0m;
+        return Math.Min(999999.99m, Math.Round((decimal)km, 2));
+    }
+
+    private static IReadOnlyList<LatLng> DownsamplePoints(IReadOnlyList<LatLng> points, int maxCount)
+    {
+        if (points.Count <= maxCount || maxCount < 2) return points;
+        var sampled = new List<LatLng>(maxCount);
+        var step = (double)(points.Count - 1) / (maxCount - 1);
+        for (int i = 0; i < maxCount - 1; i++)
+        {
+            sampled.Add(points[(int)Math.Round(i * step)]);
+        }
+        sampled.Add(points[^1]);
+        return sampled;
     }
 }

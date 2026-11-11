@@ -180,11 +180,11 @@ function BulkDeleteDialog({
   );
 }
 
-function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+function Field({ label, value, onChange, type = "text", maxLength, placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; maxLength?: number; placeholder?: string }) {
   return (
     <div className="grid gap-1.5">
       <Label>{label}</Label>
-      <Input type={type} value={value} onChange={(e) => onChange(e.target.value)} />
+      <Input type={type} value={value} maxLength={maxLength} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }
@@ -1194,6 +1194,7 @@ export function RoutesPage() {
   const [routeView, setRouteView] = useState<"all" | "new" | "earlier">("all");
   const [rebuildingRoads, setRebuildingRoads] = useState(false);
   const [rebuildStatus, setRebuildStatus] = useState<string | null>(null);
+  const [savingRoute, setSavingRoute] = useState(false);
 
   async function snapAllRoutesToRoads() {
     setRebuildingRoads(true);
@@ -1298,6 +1299,28 @@ export function RoutesPage() {
 
   async function save() {
     setError("");
+    const trimmedCode = code.trim();
+    const trimmedName = name.trim();
+    if (!trimmedCode) {
+      setError("Enter a route code.");
+      return;
+    }
+    if (trimmedCode.length > 20) {
+      setError("Route code must be 20 characters or fewer.");
+      return;
+    }
+    if (trimmedName.length < 2) {
+      setError("Enter a route name.");
+      return;
+    }
+    if (trimmedName.length > 150) {
+      setError("Route name must be 150 characters or fewer.");
+      return;
+    }
+    if (stopIds.length < 2) {
+      setError("A route needs at least two stops.");
+      return;
+    }
     if (distanceMode === "Manual" && segmentDistances.length !== Math.max(0, stopIds.length - 1)) {
       setError("Enter a distance for every leg between stops.");
       return;
@@ -1306,10 +1329,11 @@ export function RoutesPage() {
       setError("Each manual leg distance must be greater than 0 km.");
       return;
     }
+    setSavingRoute(true);
     try {
       const body = {
-        code,
-        name,
+        code: trimmedCode,
+        name: trimmedName,
         operatorId: operatorId ? Number(operatorId) : null,
         stopIds,
         distanceMode,
@@ -1321,6 +1345,8 @@ export function RoutesPage() {
       await query.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save");
+    } finally {
+      setSavingRoute(false);
     }
   }
 
@@ -1587,9 +1613,10 @@ export function RoutesPage() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>{editing ? "Edit route" : "Create route"}</DialogTitle></DialogHeader>
-          <Field label="Code" value={code} onChange={setCode} />
-          <Field label="Name" value={name} onChange={setName} />
+          <Field label="Code (max 20 characters)" value={code} onChange={setCode} maxLength={20} placeholder="e.g. FTB-HSR-01" />
+          <Field label="Name" value={name} onChange={setName} maxLength={150} placeholder="e.g. Fatehabad to Hisar Express" />
           <SelectField label="Operator" value={operatorId} onChange={setOperatorId}>
+            <option value="">Unassigned</option>
             {operators.data?.map((op) => <option key={op.id} value={op.id}>{op.name}</option>)}
           </SelectField>
           <SelectField label="Distance calculation" value={distanceMode} onChange={(value) => {
@@ -1695,7 +1722,9 @@ export function RoutesPage() {
             </div>
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button onClick={() => void save()}>Save route</Button>
+          <Button onClick={() => void save()} disabled={savingRoute}>
+            {savingRoute ? "Saving…" : "Save route"}
+          </Button>
         </DialogContent>
       </Dialog>
       <BulkActionBar
