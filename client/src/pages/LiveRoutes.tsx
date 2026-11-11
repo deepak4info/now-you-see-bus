@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { ArrowRight, BusFront, Compass, MapPin, Navigation, Route as RouteIcon, Search } from "lucide-react";
 import { MapView, type BusPin } from "@/components/MapView";
+import { BusTrackingSection } from "@/components/BusTrackingSection";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNotice";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ export function LiveRoutesPage() {
   const routes = routesQuery.data ?? [];
   const liveBusesQuery = useQuery<TrackSnapshot[]>("/api/live");
   const [liveBuses, setLiveBuses] = useState<TrackSnapshot[]>([]);
+  const [latestLiveUpdate, setLatestLiveUpdate] = useState<TrackSnapshot | null>(null);
 
   useEffect(() => {
     if (liveBusesQuery.data) setLiveBuses(liveBusesQuery.data);
@@ -27,6 +29,7 @@ export function LiveRoutesPage() {
     let active = true;
     const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (snapshot: TrackSnapshot) => {
+      if (active) setLatestLiveUpdate(snapshot);
       setLiveBuses((current) => {
         const index = current.findIndex(
           (row) => row.fleetNumber === snapshot.fleetNumber && row.routeId === snapshot.routeId,
@@ -272,6 +275,10 @@ export function LiveRoutesPage() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="mt-10">
+        <BusTrackingSection liveUpdate={latestLiveUpdate} />
       </div>
     </div>
   );

@@ -25,12 +25,14 @@ export function BusPage() {
   const from = params.get("from") ?? "";
   const to = params.get("to") ?? "";
   const routeId = params.get("routeId") ?? "";
+  const tripId = params.get("tripId") ?? "";
   const dateParam = params.get("date");
   const date = isDateOnly(dateParam) ? dateParam : getIndiaDate();
   const qs = new URLSearchParams();
   if (from) qs.set("from", from);
   if (to) qs.set("to", to);
   if (routeId) qs.set("routeId", routeId);
+  if (tripId) qs.set("tripId", tripId);
   qs.set("date", date);
   const hasJourney = !!from && !!to;
   const searchPath = hasJourney
@@ -52,7 +54,7 @@ export function BusPage() {
     fleet,
     seed,
     requestedRouteId ?? seed?.routeId,
-    date === getIndiaDate(),
+    !tripId && date === getIndiaDate() && seed?.status !== "Completed" && seed?.status !== "Cancelled",
   );
   const { user } = useAuth();
   const stopOptions = useQuery<StopOption[]>("/api/stops");

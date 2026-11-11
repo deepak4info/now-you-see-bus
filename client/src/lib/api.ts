@@ -58,6 +58,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const url = resolveUrl(path);
   const res = await fetch(url, { ...options, headers });
   if (res.status === 204) return undefined as T;
+  const contentType = res.headers.get("content-type") ?? "";
   const text = await res.text();
   const data = text ? safeJson(text) : null;
   if (!res.ok) {
@@ -68,6 +69,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       setToken(null);
     }
     throw new ApiError(message, res.status);
+  }
+  if (text.trim().length > 0 && data === null) {
+    throw new ApiError(
+      contentType.includes("text/html")
+        ? "This service endpoint is not available yet on the backend server."
+        : "Server returned an unexpected response format.",
+      res.status,
+    );
   }
   return data as T;
 }

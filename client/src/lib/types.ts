@@ -44,11 +44,14 @@ export type TrackSnapshot = {
   routeId: number;
   fleetNumber: string;
   registrationNumber: string;
+  busName?: string;
   busType: string;
   capacity: number;
   operatorName: string;
   routeCode: string;
   routeName: string;
+  originStop?: string | null;
+  destinationStop?: string | null;
   status: string;
   driverName: string | null;
   latitude: number | null;
@@ -66,6 +69,8 @@ export type TrackSnapshot = {
   departureTime: string;
   actualDepartureTime?: string | null;
   estimatedDepartureTime?: string | null;
+  estimatedArrivalTime?: string | null;
+  actualArrivalTime?: string | null;
   delayStatus?: string | null;
   lastEtaUpdate?: string | null;
   serviceDate: string;
@@ -87,6 +92,45 @@ export type SearchResponse = {
   requestedDate?: string;
   showingNextDate?: boolean;
   results: TrackSnapshot[];
+};
+
+export type BusTrackingItem = {
+  tripId: number | null;
+  scheduleId: number | null;
+  busId: number;
+  routeId: number;
+  fleetNumber: string;
+  registrationNumber: string;
+  busName: string;
+  busType: string;
+  operatorName: string;
+  routeCode: string;
+  routeName: string;
+  originStop: string;
+  destinationStop: string;
+  currentLocation: string | null;
+  nextStop: string | null;
+  etaMinutes: number | null;
+  departureTime: string;
+  actualDepartureTime: string | null;
+  estimatedArrivalTime: string | null;
+  actualArrivalTime: string | null;
+  serviceDate: string;
+  status: string;
+  delayMinutes: number | null;
+  delayStatus: string | null;
+  recordedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  operationsLive: boolean;
+};
+
+export type PaginatedBusTracking = {
+  items: BusTrackingItem[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
 };
 
 export type Favorite = {

@@ -150,12 +150,25 @@ public class TrackingService
         ?? snap.DepartureTime;
 
     public async Task<TrackSnapshotDto?> GetByFleetAsync(
-        string fleet, string? from, string? to, int? requestedRouteId = null, CancellationToken ct = default)
+        string fleet,
+        string? from,
+        string? to,
+        int? requestedRouteId = null,
+        CancellationToken ct = default,
+        DateOnly? serviceDate = null,
+        int? tripId = null)
     {
         var normalized = NormalizeFleet(fleet);
         var bus = await _db.Buses.AsNoTracking().FirstOrDefaultAsync(
             b => b.IsActive && (b.FleetNumber == normalized || b.RegistrationNumber == normalized), ct);
         if (bus is null) return null;
+
+        if (tripId is int explicitTripId)
+        {
+            var specificTrip = await QueryTrips().FirstOrDefaultAsync(t => t.Id == explicitTripId && t.BusId == bus.Id, ct);
+            if (specificTrip is not null)
+                return await BuildSnapshot(specificTrip, from, to, ct);
+        }
 
         List<int>? legRouteIds = null;
         if (!string.IsNullOrWhiteSpace(from) && !string.IsNullOrWhiteSpace(to))
@@ -187,8 +200,8 @@ public class TrackingService
             legRouteIds = [routeId];
         }
 
-        var today = IndiaClock.Today();
-        var trips = await QueryTrips().Where(t => t.BusId == bus.Id && t.ServiceDate == today).ToListAsync(ct);
+        var targetDate = serviceDate ?? IndiaClock.Today();
+        var trips = await QueryTrips().Where(t => t.BusId == bus.Id && t.ServiceDate == targetDate).ToListAsync(ct);
         var matchingTrips = legRouteIds is null ? trips : trips.Where(t => legRouteIds.Contains(t.RouteId));
         var trip = matchingTrips
             .OrderByDescending(t => t.Status == "Running")
@@ -197,15 +210,18 @@ public class TrackingService
             .FirstOrDefault();
         if (trip is not null) return await BuildSnapshot(trip, from, to, ct);
 
-        var schedule = await _db.Schedules
+        var targetDayIndex = IndiaClock.DayIndex(targetDate);
+        var candidateSchedules = await _db.Schedules
             .Include(s => s.Bus!).ThenInclude(b => b.Operator)
             .Include(s => s.Route)
             .Include(s => s.Driver!).ThenInclude(d => d.User)
             .Where(s => s.IsActive && s.BusId == bus.Id
                 && (legRouteIds == null || legRouteIds.Contains(s.RouteId)))
             .OrderBy(s => s.DepartureTime)
-            .FirstOrDefaultAsync(ct);
-        return schedule is null ? null : await BuildScheduleSnapshot(schedule, from, to, today, ct);
+            .ToListAsync(ct);
+        var schedule = candidateSchedules.FirstOrDefault(s => RunsOn(s.ServiceDays, targetDayIndex))
+            ?? candidateSchedules.FirstOrDefault();
+        return schedule is null ? null : await BuildScheduleSnapshot(schedule, from, to, targetDate, ct);
     }
 
     public async Task<TrackSnapshotDto?> GetTripAsync(int tripId, CancellationToken ct = default)
@@ -217,12 +233,313 @@ public class TrackingService
     public async Task<List<TrackSnapshotDto>> LiveAsync(CancellationToken ct = default)
     {
         var today = IndiaClock.Today();
-        var trips = await QueryTrips().Where(t => t.ServiceDate == today && t.Status == "Running").ToListAsync(ct);
+        var minDate = today.AddDays(-1);
+        var trips = await QueryTrips()
+            .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today)
+            .ToListAsync(ct);
         var list = new List<TrackSnapshotDto>();
         foreach (var trip in trips)
             list.Add(await BuildSnapshot(trip, null, null, ct));
         return list;
     }
+
+    public async Task<List<BusTrackingItemDto>> GetLiveTrackingAsync(
+        DateTime? nowIstOverride = null,
+        CancellationToken ct = default)
+    {
+        var today = DateOnly.FromDateTime(nowIstOverride ?? IndiaClock.Now());
+        var minDate = today.AddDays(-1);
+        // Only include trips whose actual operational status is Running (never Scheduled, Completed, or Cancelled).
+        var trips = await QueryTrips()
+            .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today)
+            .OrderByDescending(t => t.StartedAt)
+            .ThenBy(t => t.Schedule.DepartureTime)
+            .ToListAsync(ct);
+
+        var items = new List<BusTrackingItemDto>(trips.Count);
+        foreach (var trip in trips)
+        {
+            var snap = await BuildSnapshot(trip, null, null, ct);
+            items.Add(ToTrackingItem(snap));
+        }
+        return items;
+    }
+
+    public async Task<PaginatedBusTrackingDto> GetRecentTrackingAsync(
+        int page = 1,
+        int pageSize = 9,
+        CancellationToken ct = default)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 50);
+
+        var recentQuery = QueryTrips()
+            .Where(t => t.Status == "Completed" || t.Status == "Cancelled");
+
+        var totalCount = await recentQuery.CountAsync(ct);
+        if (totalCount == 0)
+            return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+
+        var trips = await recentQuery
+            .OrderByDescending(t => t.ServiceDate)
+            .ThenByDescending(t => t.EndedAt ?? t.StartedAt)
+            .ThenByDescending(t => t.Schedule.DepartureTime)
+            .ThenByDescending(t => t.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        var routeIds = trips.Select(t => t.RouteId).Distinct().ToList();
+        var tripIds = trips.Select(t => t.Id).ToList();
+
+        var routeStopsMap = await LoadRouteStopsBatchAsync(routeIds, ct);
+        var etaRows = await _db.TripStopEtas.AsNoTracking()
+            .Where(e => tripIds.Contains(e.TripId))
+            .OrderBy(e => e.SequenceNo)
+            .ToListAsync(ct);
+        var etasByTrip = etaRows.GroupBy(e => e.TripId).ToDictionary(g => g.Key, g => g.ToList());
+        var liveOps = await OperationsAreLive(ct);
+
+        var items = new List<BusTrackingItemDto>(trips.Count);
+        foreach (var trip in trips)
+        {
+            routeStopsMap.TryGetValue(trip.RouteId, out var stops);
+            stops ??= new();
+            etasByTrip.TryGetValue(trip.Id, out var etas);
+            etas ??= new();
+
+            var origin = stops.FirstOrDefault()?.Stop.Name ?? "";
+            var dest = stops.LastOrDefault()?.Stop.Name ?? "";
+            var totalDist = stops.Count > 0 ? (double)stops[^1].DistanceFromOriginKm : 0;
+
+            var originEta = etas.FirstOrDefault();
+            var destEta = etas.LastOrDefault();
+
+            var actualDep = trip.Status == "Cancelled" && !trip.StartedAt.HasValue && originEta?.ActualDeparture is null
+                ? null
+                : trip.StartedAt.HasValue
+                    ? IndiaClock.FormatClock12(trip.StartedAt.Value)
+                    : (originEta?.ActualDeparture is { } ad ? IndiaClock.FormatClock12(ad) : null);
+
+            var actualArr = trip.Status == "Cancelled" && !trip.EndedAt.HasValue && destEta?.ActualArrival is null
+                ? null
+                : trip.EndedAt.HasValue
+                    ? IndiaClock.FormatClock12(trip.EndedAt.Value)
+                    : (destEta?.ActualArrival is { } aa ? IndiaClock.FormatClock12(aa) : null);
+
+            var estArrival = destEta?.EstimatedArrival is { } ea
+                ? IndiaClock.FormatClock12(ea)
+                : IndiaClock.Clock12FromDeparture(trip.Schedule.DepartureTime, totalDist);
+
+            items.Add(new BusTrackingItemDto(
+                TripId: trip.Id,
+                ScheduleId: trip.ScheduleId,
+                BusId: trip.BusId,
+                RouteId: trip.RouteId,
+                FleetNumber: trip.Bus.FleetNumber,
+                RegistrationNumber: trip.Bus.RegistrationNumber,
+                BusName: ResolveBusName(trip.Bus),
+                BusType: trip.Bus.BusType,
+                OperatorName: trip.Bus.Operator.Name,
+                RouteCode: trip.Route.Code,
+                RouteName: trip.Route.Name,
+                OriginStop: origin,
+                DestinationStop: dest,
+                CurrentLocation: dest,
+                NextStop: null,
+                EtaMinutes: null,
+                DepartureTime: IndiaClock.Clock(trip.Schedule.DepartureTime),
+                ActualDepartureTime: actualDep,
+                EstimatedArrivalTime: estArrival,
+                ActualArrivalTime: actualArr,
+                ServiceDate: trip.ServiceDate.ToString("yyyy-MM-dd"),
+                Status: trip.Status,
+                DelayMinutes: null,
+                DelayStatus: trip.Status,
+                RecordedAt: trip.EndedAt is DateTime ended ? IndiaClock.AsUtc(ended) : null,
+                Latitude: stops.LastOrDefault() is { } lastStop ? (double)lastStop.Stop.Latitude : null,
+                Longitude: stops.LastOrDefault() is { } lastStopLng ? (double)lastStopLng.Stop.Longitude : null,
+                OperationsLive: liveOps
+            ));
+        }
+
+        return new PaginatedBusTrackingDto(items, page, pageSize, totalCount, page * pageSize < totalCount);
+    }
+
+    public async Task<PaginatedBusTrackingDto> GetUpcomingTrackingAsync(
+        int page = 1,
+        int pageSize = 9,
+        int daysAhead = 6,
+        DateTime? nowIstOverride = null,
+        CancellationToken ct = default)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 50);
+        daysAhead = Math.Clamp(daysAhead, 0, 14);
+
+        var nowIst = nowIstOverride ?? IndiaClock.Now();
+        var today = DateOnly.FromDateTime(nowIst);
+        var maxDate = today.AddDays(daysAhead);
+
+        var schedules = await _db.Schedules.AsNoTracking()
+            .Include(s => s.Bus!).ThenInclude(b => b.Operator)
+            .Include(s => s.Route)
+            .Where(s => s.IsActive && s.BusId != null && s.Bus!.IsActive && s.Route.IsActive)
+            .ToListAsync(ct);
+
+        if (schedules.Count == 0)
+            return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+
+        var existingTrips = await _db.Trips.AsNoTracking()
+            .Where(t => t.ServiceDate >= today && t.ServiceDate <= maxDate)
+            .Select(t => new { t.Id, t.ScheduleId, t.ServiceDate, t.Status })
+            .ToListAsync(ct);
+        var tripLookup = existingTrips
+            .GroupBy(t => (t.ScheduleId, t.ServiceDate))
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).First());
+
+        var candidates = new List<(DateOnly Date, Schedule Schedule, int? TripId)>();
+        for (var offset = 0; offset <= daysAhead; offset++)
+        {
+            var date = today.AddDays(offset);
+            var dayIndex = IndiaClock.DayIndex(date);
+            foreach (var schedule in schedules)
+            {
+                if (!RunsOn(schedule.ServiceDays, dayIndex)) continue;
+
+                // Hide any departure whose scheduled time has already passed.
+                var departureIst = date.ToDateTime(schedule.DepartureTime);
+                if (departureIst <= nowIst) continue;
+
+                // Automatically omit trips whose operational status is already Running, Completed, or Cancelled.
+                if (tripLookup.TryGetValue((schedule.Id, date), out var existingTrip))
+                {
+                    if (existingTrip.Status != "Scheduled") continue;
+                    candidates.Add((date, schedule, existingTrip.Id));
+                }
+                else
+                {
+                    candidates.Add((date, schedule, null));
+                }
+            }
+        }
+
+        var ordered = candidates
+            .OrderBy(c => c.Date)
+            .ThenBy(c => c.Schedule.DepartureTime)
+            .ThenBy(c => c.Schedule.Id)
+            .ToList();
+
+        var totalCount = ordered.Count;
+        if (totalCount == 0)
+            return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+
+        var slice = ordered
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+
+        var routeIds = slice.Select(x => x.Schedule.RouteId).Distinct().ToList();
+        var routeStopsMap = await LoadRouteStopsBatchAsync(routeIds, ct);
+        var liveOps = await OperationsAreLive(ct);
+
+        var items = new List<BusTrackingItemDto>(slice.Count);
+        foreach (var (date, schedule, tripId) in slice)
+        {
+            routeStopsMap.TryGetValue(schedule.RouteId, out var stops);
+            stops ??= new();
+
+            var origin = stops.FirstOrDefault()?.Stop.Name ?? "";
+            var dest = stops.LastOrDefault()?.Stop.Name ?? "";
+            var totalDist = stops.Count > 0 ? (double)stops[^1].DistanceFromOriginKm : 0;
+            var estArrival = IndiaClock.Clock12FromDeparture(schedule.DepartureTime, totalDist);
+            var anchor = stops.FirstOrDefault();
+
+            items.Add(new BusTrackingItemDto(
+                TripId: tripId,
+                ScheduleId: schedule.Id,
+                BusId: schedule.Bus!.Id,
+                RouteId: schedule.RouteId,
+                FleetNumber: schedule.Bus.FleetNumber,
+                RegistrationNumber: schedule.Bus.RegistrationNumber,
+                BusName: ResolveBusName(schedule.Bus),
+                BusType: schedule.Bus.BusType,
+                OperatorName: schedule.Bus.Operator.Name,
+                RouteCode: schedule.Route.Code,
+                RouteName: schedule.Route.Name,
+                OriginStop: origin,
+                DestinationStop: dest,
+                CurrentLocation: origin,
+                NextStop: stops.Count > 1 ? stops[1].Stop.Name : dest,
+                EtaMinutes: null,
+                DepartureTime: IndiaClock.Clock(schedule.DepartureTime),
+                ActualDepartureTime: null,
+                EstimatedArrivalTime: estArrival,
+                ActualArrivalTime: null,
+                ServiceDate: date.ToString("yyyy-MM-dd"),
+                Status: "Scheduled",
+                DelayMinutes: 0,
+                DelayStatus: "Scheduled",
+                RecordedAt: null,
+                Latitude: anchor is null ? null : (double)anchor.Stop.Latitude,
+                Longitude: anchor is null ? null : (double)anchor.Stop.Longitude,
+                OperationsLive: liveOps
+            ));
+        }
+
+        return new PaginatedBusTrackingDto(items, page, pageSize, totalCount, page * pageSize < totalCount);
+    }
+
+    private async Task<Dictionary<int, List<RouteStop>>> LoadRouteStopsBatchAsync(List<int> routeIds, CancellationToken ct)
+    {
+        if (routeIds.Count == 0) return new();
+        var rows = await _db.RouteStops.AsNoTracking()
+            .Include(rs => rs.Stop)
+            .Where(rs => routeIds.Contains(rs.RouteId))
+            .OrderBy(rs => rs.RouteId)
+            .ThenBy(rs => rs.SequenceNo)
+            .ToListAsync(ct);
+        return rows.GroupBy(rs => rs.RouteId).ToDictionary(g => g.Key, g => g.ToList());
+    }
+
+    private static string ResolveBusName(Bus bus)
+    {
+        if (!string.IsNullOrWhiteSpace(bus.Model)) return bus.Model;
+        if (!string.IsNullOrWhiteSpace(bus.BusType)) return $"{bus.BusType} Service";
+        return $"Bus {bus.FleetNumber}";
+    }
+
+    private static BusTrackingItemDto ToTrackingItem(TrackSnapshotDto snap) =>
+        new(
+            TripId: snap.TripId,
+            ScheduleId: snap.ScheduleId,
+            BusId: snap.BusId,
+            RouteId: snap.RouteId,
+            FleetNumber: snap.FleetNumber,
+            RegistrationNumber: snap.RegistrationNumber,
+            BusName: snap.BusName,
+            BusType: snap.BusType,
+            OperatorName: snap.OperatorName,
+            RouteCode: snap.RouteCode,
+            RouteName: snap.RouteName,
+            OriginStop: snap.OriginStop ?? snap.Stops.FirstOrDefault()?.Name ?? "",
+            DestinationStop: snap.DestinationStop ?? snap.Stops.LastOrDefault()?.Name ?? "",
+            CurrentLocation: snap.CurrentStop,
+            NextStop: snap.NextStop,
+            EtaMinutes: snap.EtaMinutes,
+            DepartureTime: snap.DepartureTime,
+            ActualDepartureTime: snap.ActualDepartureTime,
+            EstimatedArrivalTime: snap.EstimatedArrivalTime ?? snap.Stops.LastOrDefault()?.EstimatedArrival,
+            ActualArrivalTime: snap.ActualArrivalTime ?? snap.Stops.LastOrDefault()?.ActualArrival,
+            ServiceDate: snap.ServiceDate,
+            Status: snap.Status,
+            DelayMinutes: snap.DelayMinutes,
+            DelayStatus: snap.DelayStatus,
+            RecordedAt: snap.RecordedAt,
+            Latitude: snap.Latitude,
+            Longitude: snap.Longitude,
+            OperationsLive: snap.OperationsLive
+        );
 
     public async Task<TrackSnapshotDto?> GetRouteSnapshotAsync(int routeId, CancellationToken ct = default)
     {
@@ -717,6 +1034,15 @@ public class TrackingService
             ? IndiaClock.FormatClock12(ed)
             : IndiaClock.FormatClock12(trip.Schedule.DepartureTime);
 
+        var originStopName = routeStops.FirstOrDefault()?.Stop.Name;
+        var destinationStopName = routeStops.LastOrDefault()?.Stop.Name;
+        var destEtaRow = stops.LastOrDefault();
+        var estimatedArrival = destEtaRow?.EstimatedArrival
+            ?? (routeStops.Count > 0 ? IndiaClock.Clock12FromDeparture(trip.Schedule.DepartureTime, (double)routeStops[^1].DistanceFromOriginKm) : null);
+        var actualArrival = trip.EndedAt.HasValue
+            ? IndiaClock.FormatClock12(trip.EndedAt.Value)
+            : destEtaRow?.ActualArrival;
+
         return new TrackSnapshotDto
         {
             TripId = trip.Id,
@@ -725,11 +1051,14 @@ public class TrackingService
             RouteId = trip.RouteId,
             FleetNumber = trip.Bus.FleetNumber,
             RegistrationNumber = trip.Bus.RegistrationNumber,
+            BusName = ResolveBusName(trip.Bus),
             BusType = trip.Bus.BusType,
             Capacity = trip.Bus.Capacity,
             OperatorName = trip.Bus.Operator.Name,
             RouteCode = trip.Route.Code,
             RouteName = trip.Route.Name,
+            OriginStop = originStopName,
+            DestinationStop = destinationStopName,
             Status = trip.Status,
             DriverName = trip.Driver.User.FullName,
             Latitude = lat,
@@ -747,6 +1076,8 @@ public class TrackingService
             DepartureTime = IndiaClock.Clock(trip.Schedule.DepartureTime),
             ActualDepartureTime = actualDeparture,
             EstimatedDepartureTime = estimatedDeparture,
+            EstimatedArrivalTime = estimatedArrival,
+            ActualArrivalTime = actualArrival,
             DelayStatus = delayStatus,
             LastEtaUpdate = etas.Max(e => e.LastUpdatedAt) ?? (ping is null ? null : IndiaClock.AsUtc(ping.RecordedAt)),
             ServiceDate = trip.ServiceDate.ToString("yyyy-MM-dd"),
@@ -793,6 +1124,12 @@ public class TrackingService
         var (fare, _, _, _) = await PassengerLeg(schedule.RouteId, routeStops, from, to, null, null, ct);
         var live = await OperationsAreLive(ct);
         var anchor = routeStops.Count > 0 ? routeStops[0] : null;
+        var originStopName = routeStops.FirstOrDefault()?.Stop.Name;
+        var destinationStopName = routeStops.LastOrDefault()?.Stop.Name;
+        var estimatedArrival = stops.LastOrDefault()?.EstimatedArrival
+            ?? (routeStops.Count > 0
+                ? IndiaClock.FormatClock12(departureUtc.AddMinutes(Geo.EtaMinutes((double)routeStops[^1].DistanceFromOriginKm) + delay))
+                : null);
 
         return new TrackSnapshotDto
         {
@@ -801,11 +1138,14 @@ public class TrackingService
             RouteId = schedule.RouteId,
             FleetNumber = schedule.Bus.FleetNumber,
             RegistrationNumber = schedule.Bus.RegistrationNumber,
+            BusName = ResolveBusName(schedule.Bus),
             BusType = schedule.Bus.BusType,
             Capacity = schedule.Bus.Capacity,
             OperatorName = schedule.Bus.Operator.Name,
             RouteCode = schedule.Route.Code,
             RouteName = schedule.Route.Name,
+            OriginStop = originStopName,
+            DestinationStop = destinationStopName,
             Status = "Scheduled",
             DriverName = schedule.Driver?.User.FullName,
             Latitude = anchor is null ? null : (double)anchor.Stop.Latitude,
@@ -814,6 +1154,8 @@ public class TrackingService
             DepartureTime = IndiaClock.Clock(schedule.DepartureTime),
             ActualDepartureTime = null,
             EstimatedDepartureTime = delay > 0 ? IndiaClock.FormatClock12(departureUtc.AddMinutes(delay)) : IndiaClock.FormatClock12(schedule.DepartureTime),
+            EstimatedArrivalTime = estimatedArrival,
+            ActualArrivalTime = null,
             DelayStatus = delayStatus,
             LastEtaUpdate = DateTime.UtcNow,
             ServiceDate = date.ToString("yyyy-MM-dd"),

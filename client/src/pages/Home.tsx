@@ -3,11 +3,12 @@ import { ArrowLeftRight, ArrowRight, BusFront, CalendarDays, ChevronDown, Circle
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { MapView, type BusPin } from "@/components/MapView";
+import { BusTrackingSection } from "@/components/BusTrackingSection";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNotice";
 import { Button } from "@/components/ui/button";
 import { resolveUrl, useQuery } from "@/lib/api";
-import { ago, formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly } from "@/lib/format";
+import { formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly } from "@/lib/format";
 import { useBusLive } from "@/lib/live";
 import { getRecentSearch, saveRecentSearch, type RecentSearch } from "@/lib/recentSearch";
 import type { PublicRoute, SearchResponse, StopOption, TrackSnapshot } from "@/lib/types";
@@ -45,6 +46,7 @@ export function HomePage() {
 
   const liveBusesQuery = useQuery<TrackSnapshot[]>("/api/live");
   const [liveBuses, setLiveBuses] = useState<TrackSnapshot[]>([]);
+  const [latestLiveUpdate, setLatestLiveUpdate] = useState<TrackSnapshot | null>(null);
   const [liveUpdatesError, setLiveUpdatesError] = useState("");
   const [from, setFrom] = useState(() => homeParams.get("from") ?? recentSearch.from);
   const [to, setTo] = useState(() => homeParams.get("to") ?? recentSearch.to);
@@ -72,6 +74,7 @@ export function HomePage() {
     let active = true;
     const conn = new HubConnectionBuilder().withUrl(resolveUrl("/hubs/tracking")).withAutomaticReconnect().build();
     conn.on("location", (snapshot: TrackSnapshot) => {
+      if (active) setLatestLiveUpdate(snapshot);
       setLiveBuses((current) => {
         const index = current.findIndex(
           (row) => row.fleetNumber === snapshot.fleetNumber && row.routeId === snapshot.routeId,
@@ -447,79 +450,11 @@ export function HomePage() {
         </form>
       </section>
 
-      <section className="order-4 lg:col-span-2 lg:row-start-3" aria-labelledby="latest-bus-updates">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-pine">Live service information</p>
-            <h2 id="latest-bus-updates" className="mt-1 font-display text-3xl sm:text-4xl">Buses on the road</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Live location, next stop, and schedule information.</p>
-          </div>
-          <span className="flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs font-medium text-pine"><span className="pulse" /> Live updates</span>
-        </div>
-        {liveBusesQuery.loading && <p className="mt-5 text-sm text-muted-foreground">Loading current bus updates…</p>}
-        {liveBusesQuery.error && <p className="mt-5 text-sm text-destructive">{liveBusesQuery.error}</p>}
-        {liveUpdatesError && <p className="mt-3 text-sm text-destructive">Live updates disconnected: {liveUpdatesError}</p>}
-        {!liveBusesQuery.loading && !liveBusesQuery.error && liveBuses.length === 0 && (
-          <div className="mt-5 flex flex-col gap-4 rounded-2xl border bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:p-6">
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><BusFront size={22} aria-hidden="true" /></span>
-            <div className="min-w-0 flex-1">
-              <h3 className="font-semibold text-ink">No buses are running right now</h3>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Scheduled services are still available. Search your stops to check the next departure and fare.</p>
-            </div>
-            <Button variant="outline" className="shrink-0" onClick={() => document.getElementById("journey-search")?.scrollIntoView({ behavior: "smooth" })}>
-              Find a bus <ArrowRight size={16} aria-hidden="true" />
-            </Button>
-          </div>
-        )}
-        {liveBuses.length > 0 && (
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            {liveBuses.map((busUpdate) => (
-              <article key={`${busUpdate.fleetNumber}-${busUpdate.routeId}`} className="rounded-2xl border border-border/70 bg-card p-5 transition-colors hover:border-primary/30">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-wider text-muted-foreground">
-                      {busUpdate.operatorName} · Route {busUpdate.routeCode}
-                    </p>
-                    <h3 className="mt-1 font-display text-2xl">Bus {busUpdate.fleetNumber}</h3>
-                    <p className="text-sm text-muted-foreground">{busUpdate.registrationNumber} · {busUpdate.routeName}</p>
-                  </div>
-                  <StatusBadge status={busUpdate.status} />
-                </div>
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <dt className="text-muted-foreground">Current stop</dt>
-                    <dd className="font-medium">{busUpdate.currentStop ?? "Between stops"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Next stop</dt>
-                    <dd className="font-medium">
-                      {busUpdate.nextStop ?? "—"}
-                      {busUpdate.etaMinutes != null ? ` · ${formatEta(busUpdate.etaMinutes)}` : ""}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Schedule</dt>
-                    <dd className="font-medium">
-                      {busUpdate.outsideSlot
-                        ? "Outside scheduled time"
-                        : busUpdate.delayMinutes != null && busUpdate.delayMinutes > 2
-                          ? `${busUpdate.delayMinutes} min delayed`
-                          : "On time"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">Last location update</dt>
-                    <dd className="font-medium">{ago(busUpdate.recordedAt)}</dd>
-                  </div>
-                </dl>
-                <Button className="mt-4" variant="outline" asChild>
-                  <Link to={`/track/${busUpdate.fleetNumber}?routeId=${busUpdate.routeId}`}>Track this bus</Link>
-                </Button>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+      <BusTrackingSection
+        liveUpdate={latestLiveUpdate}
+        liveUpdatesError={liveUpdatesError}
+        onFindBusClick={() => document.getElementById("journey-search")?.scrollIntoView({ behavior: "smooth" })}
+      />
       <section className="order-5 lg:col-span-2 lg:row-start-4" aria-labelledby="how-it-works">
         <div className="mb-5">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-pine">Simple journey planning</p>

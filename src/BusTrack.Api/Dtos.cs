@@ -34,11 +34,14 @@ public record TrackSnapshotDto
     public int RouteId { get; init; }
     public string FleetNumber { get; init; } = "";
     public string RegistrationNumber { get; init; } = "";
+    public string BusName { get; init; } = "";
     public string BusType { get; init; } = "";
     public int Capacity { get; init; }
     public string OperatorName { get; init; } = "";
     public string RouteCode { get; init; } = "";
     public string RouteName { get; init; } = "";
+    public string? OriginStop { get; init; }
+    public string? DestinationStop { get; init; }
     public string Status { get; init; } = "";
     public string? DriverName { get; init; }
     public double? Latitude { get; init; }
@@ -56,6 +59,8 @@ public record TrackSnapshotDto
     public string DepartureTime { get; init; } = "";
     public string? ActualDepartureTime { get; init; }
     public string? EstimatedDepartureTime { get; init; }
+    public string? EstimatedArrivalTime { get; init; }
+    public string? ActualArrivalTime { get; init; }
     public string? DelayStatus { get; init; }
     public DateTime? LastEtaUpdate { get; init; }
     public string ServiceDate { get; init; } = "";
@@ -191,5 +196,44 @@ public record RouteSearchResultDto(
     DateOnly RequestedDate,
     bool ShowingNextDate,
     List<TrackSnapshotDto> Results
+);
+
+public record BusTrackingItemDto(
+    int? TripId,
+    int? ScheduleId,
+    int BusId,
+    int RouteId,
+    string FleetNumber,
+    string RegistrationNumber,
+    string BusName,
+    string BusType,
+    string OperatorName,
+    string RouteCode,
+    string RouteName,
+    string OriginStop,
+    string DestinationStop,
+    string? CurrentLocation,
+    string? NextStop,
+    int? EtaMinutes,
+    string DepartureTime,
+    string? ActualDepartureTime,
+    string? EstimatedArrivalTime,
+    string? ActualArrivalTime,
+    string ServiceDate,
+    string Status,
+    int? DelayMinutes,
+    string? DelayStatus,
+    DateTime? RecordedAt,
+    double? Latitude,
+    double? Longitude,
+    bool OperationsLive
+);
+
+public record PaginatedBusTrackingDto(
+    List<BusTrackingItemDto> Items,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    bool HasMore
 );
 

@@ -87,9 +87,11 @@ public class PassengerController : ControllerBase
         [FromQuery] string? from,
         [FromQuery] string? to,
         [FromQuery] int? routeId,
+        [FromQuery] DateOnly? date,
+        [FromQuery] int? tripId,
         CancellationToken ct)
     {
-        var snap = await _tracking.GetByFleetAsync(fleet, from, to, routeId, ct);
+        var snap = await _tracking.GetByFleetAsync(fleet, from, to, routeId, ct, date, tripId);
         if (snap is null) return NotFound(new { message = $"No bus matches {fleet}." });
         return Ok(snap);
     }
@@ -104,6 +106,34 @@ public class PassengerController : ControllerBase
             return Ok(scheduledRoutes);
         }
         return Ok(liveList);
+    }
+
+    [HttpGet("tracking/live")]
+    public async Task<IActionResult> TrackingLive(CancellationToken ct = default)
+    {
+        var items = await _tracking.GetLiveTrackingAsync(ct: ct);
+        return Ok(items);
+    }
+
+    [HttpGet("tracking/recent")]
+    public async Task<IActionResult> TrackingRecent(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 9,
+        CancellationToken ct = default)
+    {
+        var result = await _tracking.GetRecentTrackingAsync(page, pageSize, ct);
+        return Ok(result);
+    }
+
+    [HttpGet("tracking/upcoming")]
+    public async Task<IActionResult> TrackingUpcoming(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 9,
+        [FromQuery] int daysAhead = 6,
+        CancellationToken ct = default)
+    {
+        var result = await _tracking.GetUpcomingTrackingAsync(page, pageSize, daysAhead, ct: ct);
+        return Ok(result);
     }
 
     [HttpGet("routes")]

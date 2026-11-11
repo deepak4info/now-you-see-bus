@@ -214,6 +214,7 @@ app.MapGet("/api/health", async (AppDbContext db) =>
     });
 });
 
+app.MapFallback("/api/{**slug}", () => Results.NotFound(new { message = "API endpoint not found." }));
 app.MapFallbackToFile("index.html");
 
 app.Run();
