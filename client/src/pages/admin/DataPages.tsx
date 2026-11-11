@@ -1746,6 +1746,42 @@ export function RoutesPage() {
   );
 }
 
+const SCHEDULE_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const SCHEDULE_TIME_WINDOWS: Record<string, [number, number]> = {
+  morning: [0, 12],
+  afternoon: [12, 17],
+  evening: [17, 21],
+  night: [21, 24],
+};
+
+function matchesAssigneeFilter(entityId: number | null, filter: string): boolean {
+  if (!filter) return true;
+  if (filter === "unassigned") return entityId == null;
+  if (filter === "assigned") return entityId != null;
+  return String(entityId ?? "") === filter;
+}
+
+function parseScheduleHour24(departureTime: string): number | null {
+  if (!departureTime) return null;
+  const trimmed = departureTime.trim();
+  const [hRaw] = trimmed.split(":");
+  const h = Number(hRaw);
+  if (Number.isNaN(h)) return null;
+  const upper = trimmed.toUpperCase();
+  if (upper.includes("PM") && h < 12) return h + 12;
+  if (upper.includes("AM") && h === 12) return 0;
+  return h;
+}
+
+function formatScheduleDays(daysMask: string): string {
+  if (!daysMask || daysMask === "1111111") return "Daily";
+  if (daysMask === "1111100") return "Mon–Fri";
+  if (daysMask === "0000011") return "Sat–Sun";
+  const active = SCHEDULE_DAYS.filter((_, idx) => daysMask[idx] === "1");
+  return active.length > 0 ? active.join(", ") : "None";
+}
+
 export function SchedulesPage() {
   const query = useQuery<Schedule[]>("/api/admin/schedules");
   const routes = useQuery<RouteRow[]>("/api/admin/routes");
@@ -1756,7 +1792,62 @@ export function SchedulesPage() {
   const [form, setForm] = useState({ routeId: "", busId: "", driverId: "", departureTime: "08:00", serviceDays: "1111111" });
   const [error, setError] = useState("");
 
-  const selection = useTableSelection(query.data ?? []);
+  const [search, setSearch] = useState("");
+  const [routeFilter, setRouteFilter] = useState("");
+  const [busFilter, setBusFilter] = useState("");
+  const [driverFilter, setDriverFilter] = useState("");
+  const [timeFilter, setTimeFilter] = useState("");
+  const [dayFilter, setDayFilter] = useState("");
+
+  const allSchedules = query.data ?? [];
+  const filteredSchedules = allSchedules.filter((row) => {
+    if (routeFilter && String(row.routeId) !== routeFilter) return false;
+    if (!matchesAssigneeFilter(row.busId, busFilter)) return false;
+    if (!matchesAssigneeFilter(row.driverId, driverFilter)) return false;
+
+    if (timeFilter) {
+      const hour = parseScheduleHour24(row.departureTime);
+      const range = SCHEDULE_TIME_WINDOWS[timeFilter];
+      if (hour === null || !range || hour < range[0] || hour >= range[1]) return false;
+    }
+
+    if (dayFilter) {
+      const dayIndex = Number(dayFilter);
+      if (!row.serviceDays || row.serviceDays[dayIndex] !== "1") return false;
+    }
+
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const haystack = [
+        row.routeCode,
+        row.routeName,
+        row.fleetNumber ?? "unassigned",
+        row.registrationNumber ?? "",
+        row.driverName ?? "unassigned",
+        row.driverCode ?? "",
+        row.departureTime,
+        formatClock(row.departureTime),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+
+    return true;
+  });
+
+  const hasActiveFilters = Boolean(search.trim() || routeFilter || busFilter || driverFilter || timeFilter || dayFilter);
+
+  function clearFilters() {
+    setSearch("");
+    setRouteFilter("");
+    setBusFilter("");
+    setDriverFilter("");
+    setTimeFilter("");
+    setDayFilter("");
+  }
+
+  const selection = useTableSelection(filteredSchedules);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkUpdateOpen, setBulkUpdateOpen] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -1766,10 +1857,13 @@ export function SchedulesPage() {
 
   function edit(row?: Schedule) {
     setEditing(row ?? null);
+    const defaultRouteId = row?.routeId ?? (routeFilter ? Number(routeFilter) : routes.data?.[0]?.id);
+    const defaultBusId = row?.busId ?? (busFilter && busFilter !== "unassigned" && busFilter !== "assigned" ? Number(busFilter) : undefined);
+    const defaultDriverId = row?.driverId ?? (driverFilter && driverFilter !== "unassigned" && driverFilter !== "assigned" ? Number(driverFilter) : undefined);
     setForm({
-      routeId: String(row?.routeId ?? routes.data?.[0]?.id ?? ""),
-      busId: row?.busId ? String(row.busId) : "",
-      driverId: row?.driverId ? String(row.driverId) : "",
+      routeId: defaultRouteId ? String(defaultRouteId) : "",
+      busId: defaultBusId ? String(defaultBusId) : "",
+      driverId: defaultDriverId ? String(defaultDriverId) : "",
       departureTime: row?.departureTime ?? "08:00",
       serviceDays: row?.serviceDays ?? "1111111",
     });
@@ -1846,59 +1940,205 @@ export function SchedulesPage() {
     }
   }
 
-  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const days = SCHEDULE_DAYS;
 
   return (
     <Page title="Schedules" subtitle="Attach a bus and a driver to a departure." action={<Button onClick={() => edit()}>Create schedule</Button>} loading={query.loading} error={query.error}>
       <BulkFeedbackBanner feedback={bulkFeedback} onDismiss={() => setBulkFeedback(null)} />
-      <Table
-        className="max-w-5xl"
-        headers={[
-          {
-            label: (
-              <input
-                type="checkbox"
-                checked={selection.allSelected}
-                onChange={selection.toggleAll}
-                aria-label="Select all schedules"
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
-              />
-            ),
-            className: "w-10 text-center whitespace-nowrap",
-          },
-          { label: "#", className: "w-12 text-center whitespace-nowrap" },
-          { label: "Time", className: "w-[15%] whitespace-nowrap" },
-          { label: "Route", className: "w-[18%] whitespace-nowrap" },
-          { label: "Bus", className: "w-[22%] whitespace-nowrap" },
-          { label: "Driver", className: "w-[22%] whitespace-nowrap" },
-          { label: "", className: "w-[17%] text-right whitespace-nowrap" },
-        ]}
-      >
-        {query.data?.map((row, index) => (
-          <tr key={row.id} className={cn("border-t hover:bg-muted/30 transition-colors", selection.selectedIds.includes(row.id) && "bg-primary/5")}>
-            <td className="px-3 py-2.5 text-center whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={selection.selectedIds.includes(row.id)}
-                onChange={() => selection.toggle(row.id)}
-                aria-label={`Select schedule ${row.id}`}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
-              />
-            </td>
-            <td className="px-3 py-2.5 text-center text-xs text-muted-foreground whitespace-nowrap">{index + 1}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap font-medium">{formatClock(row.departureTime)}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap font-mono text-xs">{row.routeCode}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap">{row.fleetNumber ? `${row.fleetNumber} · ${row.registrationNumber}` : "Unassigned"}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{row.driverName ? `${row.driverName} · ${row.driverCode}` : "Unassigned"}</td>
-            <td className="px-4 py-2.5 text-right whitespace-nowrap">
-              <div className="inline-flex items-center justify-end gap-1">
-                <Button size="sm" variant="ghost" onClick={() => edit(row)}>Edit</Button>
-                <Button size="sm" variant="ghost" onClick={async () => { await api(`/api/admin/schedules/${row.id}`, { method: "DELETE" }); await query.reload(); }}>Remove</Button>
-              </div>
-            </td>
-          </tr>
-        ))}
-      </Table>
+      <div className="mb-4 max-w-5xl space-y-3 rounded-xl border bg-card p-3.5 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative min-w-[210px] flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="Search schedules"
+              placeholder="Search route, bus, driver, or time…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9 pr-8"
+            />
+            {search && (
+              <button
+                type="button"
+                aria-label="Clear schedule search"
+                onClick={() => setSearch("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-ink cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <select
+            aria-label="Filter by route"
+            className="h-10 min-w-[150px] max-w-[220px] rounded-md border bg-background px-3 text-sm"
+            value={routeFilter}
+            onChange={(e) => setRouteFilter(e.target.value)}
+          >
+            <option value="">All routes</option>
+            {routes.data?.map((route) => (
+              <option key={route.id} value={String(route.id)}>
+                {route.code} · {route.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filter by bus"
+            className="h-10 min-w-[140px] max-w-[200px] rounded-md border bg-background px-3 text-sm"
+            value={busFilter}
+            onChange={(e) => setBusFilter(e.target.value)}
+          >
+            <option value="">All buses</option>
+            <option value="unassigned">Unassigned bus</option>
+            <option value="assigned">Assigned bus</option>
+            {buses.data?.map((bus) => (
+              <option key={bus.id} value={String(bus.id)}>
+                {bus.fleetNumber} · {bus.registrationNumber}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filter by driver"
+            className="h-10 min-w-[140px] max-w-[200px] rounded-md border bg-background px-3 text-sm"
+            value={driverFilter}
+            onChange={(e) => setDriverFilter(e.target.value)}
+          >
+            <option value="">All drivers</option>
+            <option value="unassigned">Unassigned driver</option>
+            <option value="assigned">Assigned driver</option>
+            {drivers.data?.map((driver) => (
+              <option key={driver.id} value={String(driver.id)}>
+                {driver.fullName} · {driver.driverCode}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filter by time of day"
+            className="h-10 min-w-[135px] rounded-md border bg-background px-3 text-sm"
+            value={timeFilter}
+            onChange={(e) => setTimeFilter(e.target.value)}
+          >
+            <option value="">Any time</option>
+            <option value="morning">Morning (12 AM – 12 PM)</option>
+            <option value="afternoon">Afternoon (12 PM – 5 PM)</option>
+            <option value="evening">Evening (5 PM – 9 PM)</option>
+            <option value="night">Night (9 PM – 12 AM)</option>
+          </select>
+
+          <select
+            aria-label="Filter by service day"
+            className="h-10 min-w-[115px] rounded-md border bg-background px-3 text-sm"
+            value={dayFilter}
+            onChange={(e) => setDayFilter(e.target.value)}
+          >
+            <option value="">Any day</option>
+            {days.map((day, idx) => (
+              <option key={day} value={String(idx)}>
+                {day}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            Showing <strong className="text-ink">{filteredSchedules.length}</strong> of{" "}
+            <strong className="text-ink">{allSchedules.length}</strong> schedule{allSchedules.length === 1 ? "" : "s"}
+          </span>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1 font-medium text-primary hover:underline cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+              Clear filters
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filteredSchedules.length === 0 ? (
+        <div className="max-w-5xl rounded-xl border border-dashed bg-card px-6 py-10 text-center shadow-sm">
+          <p className="font-semibold text-ink">
+            {hasActiveFilters ? "No schedules match your current filters" : "No schedules yet"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {hasActiveFilters
+              ? "Try adjusting your search or clearing active filters."
+              : "Create a schedule to attach a bus and driver to a departure."}
+          </p>
+          {hasActiveFilters ? (
+            <Button variant="outline" size="sm" className="mt-3" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          ) : (
+            <Button size="sm" className="mt-3" onClick={() => edit()}>
+              Create schedule
+            </Button>
+          )}
+        </div>
+      ) : (
+        <Table
+          className="max-w-5xl"
+          headers={[
+            {
+              label: (
+                <input
+                  type="checkbox"
+                  checked={selection.allSelected}
+                  onChange={selection.toggleAll}
+                  aria-label="Select all schedules"
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                />
+              ),
+              className: "w-10 text-center whitespace-nowrap",
+            },
+            { label: "#", className: "w-12 text-center whitespace-nowrap" },
+            { label: "Time", className: "w-[15%] whitespace-nowrap" },
+            { label: "Route", className: "w-[18%] whitespace-nowrap" },
+            { label: "Bus", className: "w-[22%] whitespace-nowrap" },
+            { label: "Driver", className: "w-[22%] whitespace-nowrap" },
+            { label: "", className: "w-[17%] text-right whitespace-nowrap" },
+          ]}
+        >
+          {filteredSchedules.map((row, index) => (
+            <tr key={row.id} className={cn("border-t hover:bg-muted/30 transition-colors", selection.selectedIds.includes(row.id) && "bg-primary/5")}>
+              <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={selection.selectedIds.includes(row.id)}
+                  onChange={() => selection.toggle(row.id)}
+                  aria-label={`Select schedule ${row.id}`}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                />
+              </td>
+              <td className="px-3 py-2.5 text-center text-xs text-muted-foreground whitespace-nowrap">{index + 1}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap">
+                <span className="block font-medium">{formatClock(row.departureTime)}</span>
+                <span className="block text-[11px] text-muted-foreground">{formatScheduleDays(row.serviceDays)}</span>
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap" title={row.routeName}>
+                <span className="block font-mono text-xs">{row.routeCode}</span>
+                {row.routeName && row.routeName !== row.routeCode && (
+                  <span className="block max-w-[170px] truncate text-[11px] text-muted-foreground">{row.routeName}</span>
+                )}
+              </td>
+              <td className="px-4 py-2.5 whitespace-nowrap">{row.fleetNumber ? `${row.fleetNumber} · ${row.registrationNumber}` : "Unassigned"}</td>
+              <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{row.driverName ? `${row.driverName} · ${row.driverCode}` : "Unassigned"}</td>
+              <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                <div className="inline-flex items-center justify-end gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => edit(row)}>Edit</Button>
+                  <Button size="sm" variant="ghost" onClick={async () => { await api(`/api/admin/schedules/${row.id}`, { method: "DELETE" }); await query.reload(); }}>Remove</Button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </Table>
+      )}
       <BulkActionBar
         count={selection.count}
         entityName="Schedule"
