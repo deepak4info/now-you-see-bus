@@ -162,15 +162,21 @@ jobs:
 
               try {
 
-                  # IMPORTANT:
-                  # Build destination as ONE argument.
-                  # Do not split it into multiple arguments.
+                  function Format-MsDeployVal([string]$val) {
+                      if ($val -match '[\s,;="]') {
+                          return "'" + $val.Replace("'", "''") + "'"
+                      }
+                      return $val
+                  }
 
-                  $destination = '-dest:contentPath="{0}",ComputerName="{1}",UserName="{2}",Password="{3}",AuthType="Basic"' -f $site, $server, $username, $password
+                  # IMPORTANT: Build destination as ONE argument without embedded double quotes
+                  # so PowerShell 7 NativeCommandArgumentPassing does not escape literal ".
+                  $destination = '-dest:contentPath={0},ComputerName={1},UserName={2},Password={3},AuthType=Basic' -f (Format-MsDeployVal $site), (Format-MsDeployVal $server), (Format-MsDeployVal $username), (Format-MsDeployVal $password)
+                  $sourceArg = '-source:contentPath={0}' -f (Format-MsDeployVal $publishFolder)
 
                   $deployArgs = @(
                       '-verb:sync'
-                      "-source:contentPath=$publishFolder"
+                      $sourceArg
                       $destination
                       '-allowUntrusted'
                       '-enableRule:AppOffline'
