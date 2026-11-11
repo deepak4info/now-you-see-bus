@@ -184,3 +184,12 @@ public record TelemetryStatsDto(
 
 public record ResetDeviceTrustRequest(string DeviceUid);
 
+public record RouteSearchResultDto(
+    string From,
+    string To,
+    DateOnly EffectiveDate,
+    DateOnly RequestedDate,
+    bool ShowingNextDate,
+    List<TrackSnapshotDto> Results
+);
+

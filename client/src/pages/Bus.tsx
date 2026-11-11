@@ -37,17 +37,17 @@ export function BusPage() {
     ? `/api/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${date}`
     : null;
   const searchQuery = useQuery<SearchResponse>(searchPath);
-  const trackQuery = useQuery<TrackSnapshot>(
-    fleet && !from && !to ? `/api/track/${fleet}?${qs.toString()}` : null,
-  );
   const parsedRouteId = Number(routeId);
   const requestedRouteId = Number.isInteger(parsedRouteId) && parsedRouteId > 0 ? parsedRouteId : null;
   const searchSnapshot = searchQuery.data?.results.find((result) =>
     result.fleetNumber.toLocaleLowerCase() === fleet.toLocaleLowerCase()
       && (requestedRouteId == null || result.routeId === requestedRouteId),
   ) ?? null;
-  const query = hasJourney ? searchQuery : trackQuery;
-  const seed = hasJourney ? searchSnapshot : trackQuery.data;
+  const trackQuery = useQuery<TrackSnapshot>(
+    fleet && (!hasJourney || (searchQuery.data != null && searchSnapshot == null)) ? `/api/track/${fleet}?${qs.toString()}` : null,
+  );
+  const query = hasJourney && (searchSnapshot != null || !trackQuery.data) ? searchQuery : trackQuery;
+  const seed = searchSnapshot ?? trackQuery.data;
   const live = useBusLive(
     fleet,
     seed,

@@ -34,27 +34,72 @@ public class TrackingService
             ?? stops.FirstOrDefault(s => s.Name.Contains(n, StringComparison.OrdinalIgnoreCase));
     }
 
-    public async Task<List<TrackSnapshotDto>> SearchAsync(string from, string to, DateOnly date, CancellationToken ct = default)
+    public async Task<List<TrackSnapshotDto>> SearchAsync(string from, string to, DateOnly date, CancellationToken ct = default) =>
+        (await SearchRouteAsync(from, to, date, ct: ct)).Results;
+
+    public async Task<RouteSearchResultDto> SearchRouteAsync(
+        string from,
+        string to,
+        DateOnly requestedDate,
+        DateTime? nowIstOverride = null,
+        CancellationToken ct = default)
     {
         var fromStop = await FindStop(from, ct);
         var toStop = await FindStop(to, ct);
-        if (fromStop is null || toStop is null) return new();
+        if (fromStop is null || toStop is null)
+            return new RouteSearchResultDto(from, to, requestedDate, requestedDate, false, new());
 
-        var routeStops = await _db.RouteStops.AsNoTracking().Where(rs => rs.StopId == fromStop.Id || rs.StopId == toStop.Id).ToListAsync(ct);
-        var routeIds = routeStops
+        var routeStops = await _db.RouteStops.AsNoTracking()
+            .Where(rs => rs.StopId == fromStop.Id || rs.StopId == toStop.Id)
+            .ToListAsync(ct);
+
+        var routeOrigins = routeStops
             .GroupBy(rs => rs.RouteId)
-            .Where(g =>
+            .Select(g => new
             {
-                var origin = g.FirstOrDefault(x => x.StopId == fromStop.Id);
-                var dest = g.FirstOrDefault(x => x.StopId == toStop.Id);
-                return origin is not null && dest is not null && origin.SequenceNo < dest.SequenceNo;
+                RouteId = g.Key,
+                Origin = g.FirstOrDefault(x => x.StopId == fromStop.Id),
+                Dest = g.FirstOrDefault(x => x.StopId == toStop.Id)
             })
-            .Select(g => g.Key)
-            .ToList();
+            .Where(x => x.Origin is not null && x.Dest is not null && x.Origin.SequenceNo < x.Dest.SequenceNo)
+            .ToDictionary(x => x.RouteId, x => x.Origin!);
 
-        if (routeIds.Count == 0) return new();
+        if (routeOrigins.Count == 0)
+            return new RouteSearchResultDto(fromStop.Name, toStop.Name, requestedDate, requestedDate, false, new());
 
+        var nowIst = nowIstOverride ?? IndiaClock.Now();
+        var today = DateOnly.FromDateTime(nowIst);
+
+        var results = await FindUpcomingForDateAsync(fromStop, toStop, routeOrigins, requestedDate, nowIst, ct);
+        var effectiveDate = requestedDate;
+        var showingNextDate = false;
+
+        // If searching for today and no remaining departures exist, fall back to the next day automatically.
+        if (results.Count == 0 && requestedDate == today)
+        {
+            var nextDate = requestedDate.AddDays(1);
+            var nextDayResults = await FindUpcomingForDateAsync(fromStop, toStop, routeOrigins, nextDate, nowIst, ct);
+            if (nextDayResults.Count > 0)
+            {
+                results = nextDayResults;
+                effectiveDate = nextDate;
+                showingNextDate = true;
+            }
+        }
+
+        return new RouteSearchResultDto(fromStop.Name, toStop.Name, effectiveDate, requestedDate, showingNextDate, results);
+    }
+
+    private async Task<List<TrackSnapshotDto>> FindUpcomingForDateAsync(
+        Stop fromStop,
+        Stop toStop,
+        Dictionary<int, RouteStop> routeOrigins,
+        DateOnly date,
+        DateTime nowIst,
+        CancellationToken ct)
+    {
         var day = IndiaClock.DayIndex(date);
+        var routeIds = routeOrigins.Keys.ToList();
         var schedules = await _db.Schedules
             .Include(s => s.Bus!).ThenInclude(b => b.Operator)
             .Include(s => s.Route)
@@ -63,25 +108,46 @@ public class TrackingService
             .ToListAsync(ct);
         schedules = schedules.Where(s => RunsOn(s.ServiceDays, day)).ToList();
 
-        var scheduleIds = schedules.Select(s => s.Id).ToList();
+        // Filter schedules to departures strictly later than the current IST time before building snapshots.
+        var upcomingSchedules = new List<Schedule>();
+        foreach (var schedule in schedules)
+        {
+            var boardingOffsetMins = Geo.EtaMinutes((double)routeOrigins[schedule.RouteId].DistanceFromOriginKm);
+            var boardingDepartureIst = date.ToDateTime(schedule.DepartureTime).AddMinutes(boardingOffsetMins);
+            if (boardingDepartureIst > nowIst)
+                upcomingSchedules.Add(schedule);
+        }
+
+        if (upcomingSchedules.Count == 0) return new();
+
+        var scheduleIds = upcomingSchedules.Select(s => s.Id).ToList();
         var trips = await QueryTrips()
             .Where(t => scheduleIds.Contains(t.ScheduleId) && t.ServiceDate == date)
             .ToListAsync(ct);
 
         var results = new List<TrackSnapshotDto>();
-        foreach (var schedule in schedules)
+        foreach (var schedule in upcomingSchedules)
         {
             var trip = trips.FirstOrDefault(t => t.ScheduleId == schedule.Id);
-            results.Add(trip is not null
+            if (trip is not null && trip.Status == "Completed") continue;
+
+            var snap = trip is not null
                 ? await BuildSnapshot(trip, fromStop.Name, toStop.Name, ct)
-                : await BuildScheduleSnapshot(schedule, fromStop.Name, toStop.Name, date, ct));
+                : await BuildScheduleSnapshot(schedule, fromStop.Name, toStop.Name, date, ct);
+
+            if (snap.BoardingPassed) continue;
+            results.Add(snap);
         }
 
         return results
             .OrderBy(r => r.Status == "Running" ? 0 : r.Status == "Scheduled" ? 1 : 2)
-            .ThenBy(r => r.DepartureTime)
+            .ThenBy(r => GetBoardingDepartureKey(r, fromStop.Name))
             .ToList();
     }
+
+    private static string GetBoardingDepartureKey(TrackSnapshotDto snap, string fromStopName) =>
+        snap.Stops.FirstOrDefault(s => s.Name.Equals(fromStopName, StringComparison.OrdinalIgnoreCase))?.ScheduledTime
+        ?? snap.DepartureTime;
 
     public async Task<TrackSnapshotDto?> GetByFleetAsync(
         string fleet, string? from, string? to, int? requestedRouteId = null, CancellationToken ct = default)

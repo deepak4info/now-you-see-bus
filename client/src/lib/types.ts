@@ -84,6 +84,8 @@ export type SearchResponse = {
   from: string;
   to: string;
   date: string;
+  requestedDate?: string;
+  showingNextDate?: boolean;
   results: TrackSnapshot[];
 };
 

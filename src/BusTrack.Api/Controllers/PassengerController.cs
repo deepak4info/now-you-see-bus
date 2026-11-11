@@ -69,8 +69,16 @@ public class PassengerController : ControllerBase
         if (dest is null) return BadRequest(new { message = $"No stop matches \"{to.Trim()}\"." });
 
         var day = date ?? IndiaClock.Today();
-        var results = await _tracking.SearchAsync(origin.Name, dest.Name, day, ct);
-        return Ok(new { from = origin.Name, to = dest.Name, date = day.ToString("yyyy-MM-dd"), results });
+        var search = await _tracking.SearchRouteAsync(origin.Name, dest.Name, day, ct: ct);
+        return Ok(new
+        {
+            from = search.From,
+            to = search.To,
+            date = search.EffectiveDate.ToString("yyyy-MM-dd"),
+            requestedDate = search.RequestedDate.ToString("yyyy-MM-dd"),
+            showingNextDate = search.ShowingNextDate,
+            results = search.Results
+        });
     }
 
     [HttpGet("track/{fleet}")]

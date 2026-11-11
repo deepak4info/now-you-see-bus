@@ -34,7 +34,7 @@ export function HomePage() {
     recentBusSeed?.fleetNumber ?? null,
     recentBusSeed,
     recentBusSeed?.routeId,
-    travelDate === getIndiaDate(),
+    (recentBusSeed?.serviceDate ?? travelDate) === getIndiaDate(),
   );
   const routesQuery = useQuery<PublicRoute[]>("/api/routes");
   const routes = routesQuery.data ?? [];
