@@ -159,6 +159,7 @@ public class DriverController : ControllerBase
         trip.Simulation = false;
         trip.OdometerKm = 0;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateTripLifecycleCachesAsync(ct);
         return Ok(await _tracking.GetTripAsync(id, ct));
     }
 

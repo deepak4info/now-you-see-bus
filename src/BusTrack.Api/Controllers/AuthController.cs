@@ -1,5 +1,6 @@
 using BusTrack.Api.Auth;
 using BusTrack.Api.Data;
+using BusTrack.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -15,12 +16,18 @@ public class AuthController : ControllerBase
     private readonly AppDbContext _db;
     private readonly PasswordHasher<User> _passwords;
     private readonly JwtIssuer _jwt;
+    private readonly ITransitCache _cache;
 
-    public AuthController(AppDbContext db, PasswordHasher<User> passwords, JwtIssuer jwt)
+    public AuthController(
+        AppDbContext db,
+        PasswordHasher<User> passwords,
+        JwtIssuer jwt,
+        ITransitCache? cache = null)
     {
         _db = db;
         _passwords = passwords;
         _jwt = jwt;
+        _cache = cache ?? NullTransitCache.Instance;
     }
 
     [EnableRateLimiting("auth-limit")]
@@ -72,7 +79,22 @@ public class AuthController : ControllerBase
     [HttpGet("me")]
     public async Task<IActionResult> Me(CancellationToken ct)
     {
-        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == User.Id(), ct);
+        var userId = User.Id();
+        var user = await _cache.GetOrCreateDirectAsync(
+            TransitCacheService.UserProfileKey(userId),
+            CacheTtls.UserProfile,
+            token => _db.Users.AsNoTracking()
+                .Where(u => u.Id == userId)
+                .Select(u => new CachedUserProfileDto(
+                    u.Id,
+                    u.FullName,
+                    u.Email,
+                    u.Role,
+                    u.DriverCode,
+                    u.Phone,
+                    u.IsActive))
+                .FirstOrDefaultAsync(token),
+            ct);
         if (user is null || !user.IsActive) return Unauthorized(new { message = "Sign in again." });
         return Ok(new { user.FullName, user.Email, user.Role, user.DriverCode, user.Phone });
     }

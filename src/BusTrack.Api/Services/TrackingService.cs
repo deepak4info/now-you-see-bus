@@ -12,11 +12,13 @@ public class TrackingService
     private static readonly ConcurrentDictionary<int, SemaphoreSlim> TripGates = new();
     private readonly AppDbContext _db;
     private readonly IHubContext<TrackingHub> _hub;
+    private readonly ITransitCache _cache;
 
-    public TrackingService(AppDbContext db, IHubContext<TrackingHub> hub)
+    public TrackingService(AppDbContext db, IHubContext<TrackingHub> hub, ITransitCache? cache = null)
     {
         _db = db;
         _hub = hub;
+        _cache = cache ?? NullTransitCache.Instance;
     }
 
     public async Task<bool> OperationsAreLive(CancellationToken ct = default)
@@ -25,13 +27,54 @@ public class TrackingService
         return string.Equals(setting?.Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
+    public Task<List<CachedStopDto>> GetActiveStopsAsync(CancellationToken ct = default) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Stops,
+            "dedup-active",
+            CacheTtls.Stops,
+            async token =>
+            {
+                var stops = await _db.Stops.AsNoTracking()
+                    .Where(s => s.IsActive)
+                    .OrderBy(s => s.Name)
+                    .ToListAsync(token);
+                return StopNormalizer.DeduplicateStopsList(stops)
+                    .Select(s => new CachedStopDto(s.Id, s.Name, s.Code, s.City, s.Address, s.Latitude, s.Longitude))
+                    .ToList();
+            },
+            ct);
+
+    private Task<List<CachedStopDto>> GetRawActiveStopsCachedAsync(CancellationToken ct) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Stops,
+            "raw-active",
+            CacheTtls.Stops,
+            token => _db.Stops.AsNoTracking()
+                .Where(s => s.IsActive)
+                .Select(s => new CachedStopDto(s.Id, s.Name, s.Code, s.City, s.Address, s.Latitude, s.Longitude))
+                .ToListAsync(token),
+            ct);
+
     public async Task<Stop?> FindStop(string name, CancellationToken ct = default)
     {
         var n = name.Trim();
-        var stops = await _db.Stops.AsNoTracking().Where(s => s.IsActive).ToListAsync(ct);
-        return stops.FirstOrDefault(s => s.Name.Equals(n, StringComparison.OrdinalIgnoreCase))
+        var stops = await GetRawActiveStopsCachedAsync(ct);
+        var match = stops.FirstOrDefault(s => s.Name.Equals(n, StringComparison.OrdinalIgnoreCase))
             ?? stops.FirstOrDefault(s => s.Code.Equals(n, StringComparison.OrdinalIgnoreCase))
             ?? stops.FirstOrDefault(s => s.Name.Contains(n, StringComparison.OrdinalIgnoreCase));
+        return match is null
+            ? null
+            : new Stop
+            {
+                Id = match.Id,
+                Name = match.Name,
+                Code = match.Code,
+                City = match.City,
+                Address = match.Address,
+                Latitude = match.Latitude,
+                Longitude = match.Longitude,
+                IsActive = true
+            };
     }
 
     public async Task<List<TrackSnapshotDto>> SearchAsync(string from, string to, DateOnly date, CancellationToken ct = default) =>
@@ -49,6 +92,27 @@ public class TrackingService
         if (fromStop is null || toStop is null)
             return new RouteSearchResultDto(from, to, requestedDate, requestedDate, false, new());
 
+        if (nowIstOverride.HasValue)
+            return await ExecuteSearchRouteAsync(fromStop, toStop, requestedDate, nowIstOverride.Value, ct);
+
+        var today = IndiaClock.Today();
+        var ttl = requestedDate == today ? CacheTtls.SearchToday : CacheTtls.SearchFuture;
+        var cacheKey = $"search:{fromStop.Id}:{toStop.Id}:{requestedDate:yyyy-MM-dd}";
+        return await _cache.GetOrCreateAsync(
+            CacheDomains.Schedules,
+            cacheKey,
+            ttl,
+            token => ExecuteSearchRouteAsync(fromStop, toStop, requestedDate, IndiaClock.Now(), token),
+            ct);
+    }
+
+    private async Task<RouteSearchResultDto> ExecuteSearchRouteAsync(
+        Stop fromStop,
+        Stop toStop,
+        DateOnly requestedDate,
+        DateTime nowIst,
+        CancellationToken ct)
+    {
         var routeStops = await _db.RouteStops.AsNoTracking()
             .Where(rs => rs.StopId == fromStop.Id || rs.StopId == toStop.Id)
             .ToListAsync(ct);
@@ -67,7 +131,6 @@ public class TrackingService
         if (routeOrigins.Count == 0)
             return new RouteSearchResultDto(fromStop.Name, toStop.Name, requestedDate, requestedDate, false, new());
 
-        var nowIst = nowIstOverride ?? IndiaClock.Now();
         var today = DateOnly.FromDateTime(nowIst);
 
         var results = await FindUpcomingForDateAsync(fromStop, toStop, routeOrigins, requestedDate, nowIst, ct);
@@ -230,28 +293,175 @@ public class TrackingService
         return trip is null ? null : await BuildSnapshot(trip, null, null, ct);
     }
 
-    public async Task<List<TrackSnapshotDto>> LiveAsync(CancellationToken ct = default)
-    {
-        var today = IndiaClock.Today();
-        var minDate = today.AddDays(-1);
-        var trips = await QueryTrips()
-            .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today)
-            .ToListAsync(ct);
-        var list = new List<TrackSnapshotDto>();
-        foreach (var trip in trips)
-            list.Add(await BuildSnapshot(trip, null, null, ct));
-        return list;
-    }
+    public Task<List<TrackSnapshotDto>> LiveAsync(CancellationToken ct = default) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Live,
+            "snapshots",
+            CacheTtls.Live,
+            async token =>
+            {
+                var today = IndiaClock.Today();
+                var minDate = today.AddDays(-1);
+                var trips = await QueryTrips()
+                    .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today)
+                    .ToListAsync(token);
+                var list = new List<TrackSnapshotDto>();
+                foreach (var trip in trips)
+                    list.Add(await BuildSnapshot(trip, null, null, token));
+                return list;
+            },
+            ct);
+
+    public Task<List<CachedActiveRouteDto>> GetActiveRouteCatalogAsync(CancellationToken ct = default) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Routes,
+            "catalog",
+            CacheTtls.Routes,
+            async token =>
+            {
+                var routes = await _db.Routes.AsNoTracking()
+                    .Where(r => r.IsActive)
+                    .OrderBy(r => r.Code)
+                    .ToListAsync(token);
+                var routeIds = routes.Select(r => r.Id).ToList();
+                var routeStops = routeIds.Count == 0
+                    ? new()
+                    : await _db.RouteStops.AsNoTracking()
+                        .Where(rs => routeIds.Contains(rs.RouteId))
+                        .Include(rs => rs.Stop)
+                        .OrderBy(rs => rs.SequenceNo)
+                        .ToListAsync(token);
+
+                var catalog = new List<CachedActiveRouteDto>(routes.Count);
+                foreach (var route in routes)
+                {
+                    var stops = routeStops.Where(rs => rs.RouteId == route.Id).OrderBy(rs => rs.SequenceNo).ToList();
+                    if (stops.Count == 0) continue;
+
+                    var path = await LoadPath(route.Id, token);
+                    catalog.Add(new CachedActiveRouteDto(
+                        route.Id,
+                        route.Code,
+                        route.Name,
+                        route.DistanceKm ?? stops.LastOrDefault()?.DistanceFromOriginKm,
+                        stops[0].Stop.Name,
+                        stops[^1].Stop.Name,
+                        stops.Select(s => new CachedActiveRouteStopDto(
+                            s.StopId,
+                            s.Stop.Name,
+                            s.Stop.Code,
+                            s.SequenceNo,
+                            (double)s.Stop.Latitude,
+                            (double)s.Stop.Longitude,
+                            (double)s.DistanceFromOriginKm)).ToList(),
+                        path.Select(p => new CachedActiveRoutePointDto(p.Lat, p.Lng)).ToList()));
+                }
+
+                return catalog;
+            },
+            ct);
+
+    public Task<TrackingFilterOptionsDto> GetTrackingFilterOptionsAsync(CancellationToken ct = default) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Routes,
+            "filter-options",
+            CacheTtls.FilterOptions,
+            async token =>
+            {
+                var operators = await _db.Operators.AsNoTracking()
+                    .Where(o => o.IsActive)
+                    .OrderBy(o => o.Name)
+                    .Select(o => new TrackingFilterOperatorOptionDto(o.Id, o.Name, o.Code))
+                    .ToListAsync(token);
+
+                var activeRoutes = await _db.Routes.AsNoTracking()
+                    .Where(r => r.IsActive)
+                    .OrderBy(r => r.Code)
+                    .ThenBy(r => r.Name)
+                    .Select(r => new { r.Id, r.Code, r.Name })
+                    .ToListAsync(token);
+
+                var routeIds = activeRoutes.Select(r => r.Id).ToList();
+                var routeStopEndpoints = routeIds.Count == 0
+                    ? new()
+                    : await _db.RouteStops.AsNoTracking()
+                        .Where(rs => routeIds.Contains(rs.RouteId))
+                        .OrderBy(rs => rs.RouteId)
+                        .ThenBy(rs => rs.SequenceNo)
+                        .Select(rs => new { rs.RouteId, StopName = rs.Stop.Name })
+                        .ToListAsync(token);
+
+                var endpointsByRoute = routeStopEndpoints
+                    .GroupBy(x => x.RouteId)
+                    .ToDictionary(g => g.Key, g => (Origin: g.First().StopName, Dest: g.Last().StopName));
+
+                var routes = new List<TrackingFilterRouteOptionDto>(activeRoutes.Count);
+                foreach (var route in activeRoutes)
+                {
+                    if (!endpointsByRoute.TryGetValue(route.Id, out var endpoints)) continue;
+                    routes.Add(new TrackingFilterRouteOptionDto(
+                        route.Id,
+                        route.Code,
+                        route.Name,
+                        endpoints.Origin,
+                        endpoints.Dest
+                    ));
+                }
+
+                var busTypes = (await _db.Buses.AsNoTracking()
+                    .Where(b => b.IsActive && b.BusType != null && b.BusType != "")
+                    .Select(b => b.BusType)
+                    .Distinct()
+                    .ToListAsync(token))
+                    .Select(t => t.Trim())
+                    .Where(t => t.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                return new TrackingFilterOptionsDto(operators, routes, busTypes);
+            },
+            ct);
 
     public async Task<List<BusTrackingItemDto>> GetLiveTrackingAsync(
         DateTime? nowIstOverride = null,
+        TrackingFilterDto? filter = null,
         CancellationToken ct = default)
     {
-        var today = DateOnly.FromDateTime(nowIstOverride ?? IndiaClock.Now());
+        if (!IsLiveStatusSupported(filter?.Status))
+            return new();
+
+        if (nowIstOverride.HasValue)
+            return await ExecuteGetLiveTrackingAsync(nowIstOverride.Value, filter, ct);
+
+        return await _cache.GetOrCreateAsync(
+            CacheDomains.Live,
+            $"feed:{BuildFilterKey(filter)}",
+            CacheTtls.Live,
+            token => ExecuteGetLiveTrackingAsync(IndiaClock.Now(), filter, token),
+            ct);
+    }
+
+    private async Task<List<BusTrackingItemDto>> ExecuteGetLiveTrackingAsync(
+        DateTime nowIst,
+        TrackingFilterDto? filter,
+        CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(nowIst);
         var minDate = today.AddDays(-1);
+        if (filter?.Date is DateOnly targetDate && (targetDate < minDate || targetDate > today))
+            return new();
+
         // Only include trips whose actual operational status is Running (never Scheduled, Completed, or Cancelled).
-        var trips = await QueryTrips()
-            .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today)
+        var tripsQuery = QueryTrips()
+            .Where(t => t.Status == "Running" && t.ServiceDate >= minDate && t.ServiceDate <= today);
+
+        if (filter?.Date is DateOnly exactDate)
+            tripsQuery = tripsQuery.Where(t => t.ServiceDate == exactDate);
+
+        tripsQuery = ApplyTripFilters(tripsQuery, filter);
+
+        var trips = await tripsQuery
             .OrderByDescending(t => t.StartedAt)
             .ThenBy(t => t.Schedule.DepartureTime)
             .ToListAsync(ct);
@@ -260,21 +470,60 @@ public class TrackingService
         foreach (var trip in trips)
         {
             var snap = await BuildSnapshot(trip, null, null, ct);
-            items.Add(ToTrackingItem(snap));
+            var item = ToTrackingItem(snap);
+            if (!MatchesLiveStatus(item.DelayMinutes, filter?.Status)) continue;
+            items.Add(item);
         }
         return items;
     }
 
-    public async Task<PaginatedBusTrackingDto> GetRecentTrackingAsync(
+    public Task<PaginatedBusTrackingDto> GetRecentTrackingAsync(
         int page = 1,
         int pageSize = 9,
+        TrackingFilterDto? filter = null,
         CancellationToken ct = default)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 50);
 
-        var recentQuery = QueryTrips()
-            .Where(t => t.Status == "Completed" || t.Status == "Cancelled");
+        var statusFilter = filter?.Status?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(statusFilter) && statusFilter is not ("all" or "completed" or "cancelled"))
+            return Task.FromResult(new PaginatedBusTrackingDto(new(), page, pageSize, 0, false));
+
+        var key = $"feed:{page}:{pageSize}:{BuildFilterKey(filter)}";
+        return _cache.GetOrCreateAsync(
+            CacheDomains.Recent,
+            key,
+            CacheTtls.Recent,
+            token => ExecuteGetRecentTrackingAsync(page, pageSize, filter, statusFilter, token),
+            ct);
+    }
+
+    private async Task<PaginatedBusTrackingDto> ExecuteGetRecentTrackingAsync(
+        int page,
+        int pageSize,
+        TrackingFilterDto? filter,
+        string? statusFilter,
+        CancellationToken ct)
+    {
+        var recentQuery = QueryTrips();
+        if (string.IsNullOrEmpty(statusFilter) || statusFilter == "all")
+        {
+            recentQuery = recentQuery.Where(t => t.Status == "Completed" || t.Status == "Cancelled");
+        }
+        else if (statusFilter == "completed")
+        {
+            recentQuery = recentQuery.Where(t => t.Status == "Completed");
+        }
+        else
+        {
+            recentQuery = recentQuery.Where(t => t.Status == "Cancelled");
+        }
+
+        if (filter?.Date is DateOnly exactDate)
+            recentQuery = recentQuery.Where(t => t.ServiceDate == exactDate);
+
+        recentQuery = ApplyTripFilters(recentQuery, filter);
 
         var totalCount = await recentQuery.CountAsync(ct);
         if (totalCount == 0)
@@ -371,27 +620,69 @@ public class TrackingService
         int pageSize = 9,
         int daysAhead = 6,
         DateTime? nowIstOverride = null,
+        TrackingFilterDto? filter = null,
         CancellationToken ct = default)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 50);
-        daysAhead = Math.Clamp(daysAhead, 0, 14);
+        daysAhead = Math.Clamp(daysAhead, 0, 30);
 
-        var nowIst = nowIstOverride ?? IndiaClock.Now();
+        var statusFilter = filter?.Status?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(statusFilter) && statusFilter is not ("all" or "scheduled"))
+            return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+
+        if (nowIstOverride.HasValue)
+            return await ExecuteGetUpcomingTrackingAsync(page, pageSize, daysAhead, nowIstOverride.Value, filter, ct);
+
+        var nowIst = IndiaClock.Now();
+        var key = $"upcoming:{page}:{pageSize}:{daysAhead}:{nowIst:yyyyMMddHHmm}:{BuildFilterKey(filter)}";
+        return await _cache.GetOrCreateAsync(
+            CacheDomains.Schedules,
+            key,
+            CacheTtls.Upcoming,
+            token => ExecuteGetUpcomingTrackingAsync(page, pageSize, daysAhead, IndiaClock.Now(), filter, token),
+            ct);
+    }
+
+    private async Task<PaginatedBusTrackingDto> ExecuteGetUpcomingTrackingAsync(
+        int page,
+        int pageSize,
+        int daysAhead,
+        DateTime nowIst,
+        TrackingFilterDto? filter,
+        CancellationToken ct)
+    {
         var today = DateOnly.FromDateTime(nowIst);
-        var maxDate = today.AddDays(daysAhead);
 
-        var schedules = await _db.Schedules.AsNoTracking()
+        DateOnly startDate;
+        DateOnly maxDate;
+        if (filter?.Date is DateOnly requestedDate)
+        {
+            if (requestedDate < today)
+                return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+            startDate = requestedDate;
+            maxDate = requestedDate;
+        }
+        else
+        {
+            startDate = today;
+            maxDate = today.AddDays(daysAhead);
+        }
+
+        var schedulesQuery = _db.Schedules.AsNoTracking()
             .Include(s => s.Bus!).ThenInclude(b => b.Operator)
             .Include(s => s.Route)
-            .Where(s => s.IsActive && s.BusId != null && s.Bus!.IsActive && s.Route.IsActive)
-            .ToListAsync(ct);
+            .Where(s => s.IsActive && s.BusId != null && s.Bus!.IsActive && s.Route.IsActive);
+
+        schedulesQuery = ApplyScheduleFilters(schedulesQuery, filter);
+
+        var schedules = await schedulesQuery.ToListAsync(ct);
 
         if (schedules.Count == 0)
             return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
 
         var existingTrips = await _db.Trips.AsNoTracking()
-            .Where(t => t.ServiceDate >= today && t.ServiceDate <= maxDate)
+            .Where(t => t.ServiceDate >= startDate && t.ServiceDate <= maxDate)
             .Select(t => new { t.Id, t.ScheduleId, t.ServiceDate, t.Status })
             .ToListAsync(ct);
         var tripLookup = existingTrips
@@ -399,9 +690,8 @@ public class TrackingService
             .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).First());
 
         var candidates = new List<(DateOnly Date, Schedule Schedule, int? TripId)>();
-        for (var offset = 0; offset <= daysAhead; offset++)
+        for (var date = startDate; date <= maxDate; date = date.AddDays(1))
         {
-            var date = today.AddDays(offset);
             var dayIndex = IndiaClock.DayIndex(date);
             foreach (var schedule in schedules)
             {
@@ -488,6 +778,165 @@ public class TrackingService
         }
 
         return new PaginatedBusTrackingDto(items, page, pageSize, totalCount, page * pageSize < totalCount);
+    }
+
+    private IQueryable<Trip> ApplyTripFilters(IQueryable<Trip> query, TrackingFilterDto? filter)
+    {
+        if (filter is null) return query;
+
+        var busSubquery = BuildFilteredBusQuery(filter);
+        if (busSubquery is not null)
+            query = query.Where(t => busSubquery.Any(b => b.Id == t.BusId));
+
+        var routeSubquery = BuildFilteredRouteQuery(filter);
+        if (routeSubquery is not null)
+            query = query.Where(t => routeSubquery.Any(r => r.Id == t.RouteId));
+
+        var (start, end) = ResolveTimeWindow(filter.TimeOfDay);
+        if (start is TimeOnly windowStart)
+        {
+            query = end is TimeOnly windowEnd
+                ? query.Where(t => t.Schedule.DepartureTime >= windowStart && t.Schedule.DepartureTime < windowEnd)
+                : query.Where(t => t.Schedule.DepartureTime >= windowStart);
+        }
+
+        return query;
+    }
+
+    private IQueryable<Schedule> ApplyScheduleFilters(IQueryable<Schedule> query, TrackingFilterDto? filter)
+    {
+        if (filter is null) return query;
+
+        var busSubquery = BuildFilteredBusQuery(filter);
+        if (busSubquery is not null)
+            query = query.Where(s => s.BusId != null && busSubquery.Any(b => b.Id == s.BusId.Value));
+
+        var routeSubquery = BuildFilteredRouteQuery(filter);
+        if (routeSubquery is not null)
+            query = query.Where(s => routeSubquery.Any(r => r.Id == s.RouteId));
+
+        var (start, end) = ResolveTimeWindow(filter.TimeOfDay);
+        if (start is TimeOnly windowStart)
+        {
+            query = end is TimeOnly windowEnd
+                ? query.Where(s => s.DepartureTime >= windowStart && s.DepartureTime < windowEnd)
+                : query.Where(s => s.DepartureTime >= windowStart);
+        }
+
+        return query;
+    }
+
+    private IQueryable<Bus>? BuildFilteredBusQuery(TrackingFilterDto filter)
+    {
+        var hasBusFilter = !string.IsNullOrWhiteSpace(filter.BusNumber)
+            || filter.OperatorId.HasValue
+            || !string.IsNullOrWhiteSpace(filter.Operator)
+            || !string.IsNullOrWhiteSpace(filter.BusType);
+        if (!hasBusFilter) return null;
+
+        IQueryable<Bus> query = _db.Buses.AsNoTracking();
+
+        if (filter.OperatorId is int operatorId)
+            query = query.Where(b => b.OperatorId == operatorId);
+
+        if (!string.IsNullOrWhiteSpace(filter.Operator))
+        {
+            var opLower = filter.Operator.Trim().ToLowerInvariant();
+            query = query.Where(b =>
+                b.Operator.Name.ToLower().Contains(opLower)
+                || b.Operator.Code.ToLower().Contains(opLower));
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.BusType))
+        {
+            var btLower = filter.BusType.Trim().ToLowerInvariant();
+            query = query.Where(b => b.BusType.ToLower() == btLower);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.BusNumber))
+        {
+            var busTerm = filter.BusNumber.Trim();
+            var normalized = NormalizeFleet(busTerm);
+            if (string.IsNullOrWhiteSpace(normalized)) normalized = busTerm;
+            var compact = new string(normalized.Where(c => !char.IsWhiteSpace(c) && c != '-').ToArray()).ToLowerInvariant();
+            if (string.IsNullOrEmpty(compact)) compact = busTerm.ToLowerInvariant();
+
+            var termLower = busTerm.ToLowerInvariant();
+            var normLower = normalized.ToLowerInvariant();
+
+            query = query.Where(b =>
+                b.FleetNumber.ToLower().Contains(termLower)
+                || b.FleetNumber.ToLower().Contains(normLower)
+                || b.FleetNumber.Replace("-", "").Replace(" ", "").ToLower().Contains(compact)
+                || b.RegistrationNumber.ToLower().Contains(termLower)
+                || b.RegistrationNumber.ToLower().Contains(normLower)
+                || b.RegistrationNumber.Replace("-", "").Replace(" ", "").ToLower().Contains(compact)
+                || (b.Model != null && b.Model.ToLower().Contains(termLower)));
+        }
+
+        return query;
+    }
+
+    private IQueryable<Data.Route>? BuildFilteredRouteQuery(TrackingFilterDto filter)
+    {
+        var hasRouteFilter = filter.RouteId.HasValue
+            || !string.IsNullOrWhiteSpace(filter.Route)
+            || !string.IsNullOrWhiteSpace(filter.Stop);
+        if (!hasRouteFilter) return null;
+
+        IQueryable<Data.Route> query = _db.Routes.AsNoTracking();
+
+        if (filter.RouteId is int routeId)
+            query = query.Where(r => r.Id == routeId);
+
+        if (!string.IsNullOrWhiteSpace(filter.Route))
+        {
+            var routeLower = filter.Route.Trim().ToLowerInvariant();
+            query = query.Where(r =>
+                r.Code.ToLower().Contains(routeLower)
+                || r.Name.ToLower().Contains(routeLower));
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Stop))
+        {
+            var stopLower = filter.Stop.Trim().ToLowerInvariant();
+            query = query.Where(r =>
+                r.Name.ToLower().Contains(stopLower)
+                || _db.RouteStops.Any(rs => rs.RouteId == r.Id
+                    && (rs.Stop.Name.ToLower().Contains(stopLower)
+                        || rs.Stop.Code.ToLower().Contains(stopLower))));
+        }
+
+        return query;
+    }
+
+    private static (TimeOnly? Start, TimeOnly? End) ResolveTimeWindow(string? timeOfDay) =>
+        timeOfDay?.Trim().ToLowerInvariant() switch
+        {
+            "morning" => (new TimeOnly(0, 0), new TimeOnly(12, 0)),
+            "afternoon" => (new TimeOnly(12, 0), new TimeOnly(17, 0)),
+            "evening" => (new TimeOnly(17, 0), new TimeOnly(21, 0)),
+            "night" => (new TimeOnly(21, 0), null),
+            _ => (null, null)
+        };
+
+    private static bool IsLiveStatusSupported(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return true;
+        return status.Trim().ToLowerInvariant() is "all" or "running" or "ontime" or "on-time" or "on time" or "delayed" or "early";
+    }
+
+    private static bool MatchesLiveStatus(int? delayMinutes, string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return true;
+        return status.Trim().ToLowerInvariant() switch
+        {
+            "all" or "running" => true,
+            "ontime" or "on-time" or "on time" => delayMinutes is null or (>= -2 and <= 2),
+            "delayed" => delayMinutes is > 2,
+            "early" => delayMinutes is < -2,
+            _ => false
+        };
     }
 
     private async Task<Dictionary<int, List<RouteStop>>> LoadRouteStopsBatchAsync(List<int> routeIds, CancellationToken ct)
@@ -647,6 +1096,8 @@ public class TrackingService
             created++;
         }
         await _db.SaveChangesAsync(ct);
+        if (created > 0)
+            await InvalidateScheduleCachesAsync(ct);
         return created;
     }
 
@@ -657,6 +1108,7 @@ public class TrackingService
         trip.Simulation = mode == "simulate";
         trip.OdometerKm = 0;
         await _db.SaveChangesAsync(ct);
+        await InvalidateLiveAndScheduleCachesAsync(ct);
         await Notify(trip, "started", $"Bus {trip.Bus.FleetNumber} has started",
             $"Route {trip.Route.Code} left on its {IndiaClock.Clock(trip.Schedule.DepartureTime)} service.", ct);
         await Audit(userId, "StartTrip", "Trip", trip.Id.ToString(), $"Bus {trip.Bus.FleetNumber} {mode}", ct);
@@ -967,6 +1419,7 @@ public class TrackingService
         trip.EndedAt = DateTime.UtcNow;
         trip.Simulation = false;
         await _db.SaveChangesAsync(ct);
+        await InvalidateTripLifecycleCachesAsync(ct);
         await Notify(trip, "completed", "Trip completed",
             $"Bus {trip.Bus.FleetNumber} finished route {trip.Route.Code}.", ct);
         await Audit(userId, "CompleteTrip", "Trip", trip.Id.ToString(), $"Bus {trip.Bus.FleetNumber} completed", ct);
@@ -1404,6 +1857,7 @@ public class TrackingService
                 await _db.SaveChangesAsync(ct);
             }
 
+            await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
             return snap;
@@ -1465,6 +1919,7 @@ public class TrackingService
                 await _db.SaveChangesAsync(ct);
             }
 
+            await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
             return snap;
@@ -1517,6 +1972,7 @@ public class TrackingService
 
             await _db.SaveChangesAsync(ct);
 
+            await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
             return snap;
@@ -1560,11 +2016,20 @@ public class TrackingService
         return (fare, etaYou, boardingPassed, etaAlight);
     }
 
-    private Task<decimal?> FareBetween(int routeId, int fromStopId, int toStopId, CancellationToken ct) =>
-        _db.FareSlabs.AsNoTracking()
-            .Where(f => f.RouteId == routeId && f.FromStopId == fromStopId && f.ToStopId == toStopId)
-            .Select(f => (decimal?)f.Amount)
-            .FirstOrDefaultAsync(ct);
+    private async Task<decimal?> FareBetween(int routeId, int fromStopId, int toStopId, CancellationToken ct)
+    {
+        var slabs = await _cache.GetOrCreateAsync(
+            CacheDomains.Fares,
+            $"route:{routeId}",
+            CacheTtls.Fares,
+            token => _db.FareSlabs.AsNoTracking()
+                .Where(f => f.RouteId == routeId)
+                .Select(f => new CachedFareSlabDto(f.FromStopId, f.ToStopId, f.Amount))
+                .ToListAsync(token),
+            ct);
+        var match = slabs.FirstOrDefault(f => f.FromStopId == fromStopId && f.ToStopId == toStopId);
+        return match?.Amount;
+    }
 
     private async Task Publish(TrackSnapshotDto snap, CancellationToken ct)
     {
@@ -1588,23 +2053,66 @@ public class TrackingService
     private Task<Trip> LoadTrip(int id, CancellationToken ct) =>
         QueryTrips().FirstAsync(t => t.Id == id, ct);
 
-    private Task<List<RouteStop>> LoadRouteStops(int routeId, CancellationToken ct) =>
-        _db.RouteStops.AsNoTracking().Include(rs => rs.Stop)
-            .Where(rs => rs.RouteId == routeId)
-            .OrderBy(rs => rs.SequenceNo)
-            .ToListAsync(ct);
-
-    public async Task<List<LatLng>> LoadPath(int routeId, CancellationToken ct = default)
+    private async Task<List<RouteStop>> LoadRouteStops(int routeId, CancellationToken ct)
     {
-        var points = await _db.RoutePoints.AsNoTracking()
-            .Where(p => p.RouteId == routeId)
-            .OrderBy(p => p.SequenceNo)
-            .Select(p => new LatLng((double)p.Latitude, (double)p.Longitude))
-            .ToListAsync(ct);
-        if (points.Count >= 2) return points;
-        var stops = await LoadRouteStops(routeId, ct);
-        return stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList();
+        var cached = await _cache.GetOrCreateAsync(
+            CacheDomains.Routes,
+            $"route-stops:{routeId}",
+            CacheTtls.Routes,
+            token => _db.RouteStops.AsNoTracking()
+                .Where(rs => rs.RouteId == routeId)
+                .OrderBy(rs => rs.SequenceNo)
+                .Select(rs => new CachedRouteStopDto(
+                    rs.Id,
+                    rs.RouteId,
+                    rs.StopId,
+                    rs.SequenceNo,
+                    rs.DistanceFromOriginKm,
+                    rs.SegmentDistanceKm,
+                    rs.Stop.Name,
+                    rs.Stop.Code,
+                    rs.Stop.Latitude,
+                    rs.Stop.Longitude))
+                .ToListAsync(token),
+            ct);
+
+        return cached.Select(c => new RouteStop
+        {
+            Id = c.Id,
+            RouteId = c.RouteId,
+            StopId = c.StopId,
+            SequenceNo = c.SequenceNo,
+            DistanceFromOriginKm = c.DistanceFromOriginKm,
+            SegmentDistanceKm = c.SegmentDistanceKm,
+            Stop = new Stop
+            {
+                Id = c.StopId,
+                Name = c.StopName,
+                Code = c.StopCode,
+                Latitude = c.StopLatitude,
+                Longitude = c.StopLongitude,
+                IsActive = true
+            }
+        }).ToList();
     }
+
+    public Task<List<LatLng>> LoadPath(int routeId, CancellationToken ct = default) =>
+        _cache.GetOrCreateAsync(
+            CacheDomains.Routes,
+            $"path:{routeId}",
+            CacheTtls.Routes,
+            async token =>
+            {
+                var points = await _db.RoutePoints.AsNoTracking()
+                    .Where(p => p.RouteId == routeId)
+                    .OrderBy(p => p.SequenceNo)
+                    .Select(p => new LatLng((double)p.Latitude, (double)p.Longitude))
+                    .ToListAsync(token);
+                if (points.Count >= 2) return points;
+                var stops = await LoadRouteStops(routeId, token);
+                return stops.Select(s => new LatLng((double)s.Stop.Latitude, (double)s.Stop.Longitude)).ToList();
+            },
+            ct);
 
     private static double RouteDistanceAtPathDistance(
         IReadOnlyList<RouteStop> stops,
@@ -1679,4 +2187,44 @@ public class TrackingService
         if (string.IsNullOrWhiteSpace(days) || days.Length != 7) return true;
         return days[index] == '1';
     }
+
+    private static string BuildFilterKey(TrackingFilterDto? filter)
+    {
+        if (filter is null) return "none";
+        return string.Join("|",
+            filter.BusNumber?.Trim().ToLowerInvariant() ?? "",
+            filter.RouteId?.ToString() ?? "",
+            filter.Route?.Trim().ToLowerInvariant() ?? "",
+            filter.Date?.ToString("yyyy-MM-dd") ?? "",
+            filter.OperatorId?.ToString() ?? "",
+            filter.Operator?.Trim().ToLowerInvariant() ?? "",
+            filter.BusType?.Trim().ToLowerInvariant() ?? "",
+            filter.Status?.Trim().ToLowerInvariant() ?? "",
+            filter.Stop?.Trim().ToLowerInvariant() ?? "",
+            filter.TimeOfDay?.Trim().ToLowerInvariant() ?? "");
+    }
+
+    public Task InvalidateStopCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Stops, CacheDomains.Routes, CacheDomains.Schedules }, ct);
+
+    public Task InvalidateRouteCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Routes, CacheDomains.Fares, CacheDomains.Schedules, CacheDomains.Live, CacheDomains.Recent }, ct);
+
+    public Task InvalidateFareCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Fares, CacheDomains.Schedules }, ct);
+
+    public Task InvalidateScheduleCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainAsync(CacheDomains.Schedules, ct);
+
+    public Task InvalidateLiveAndScheduleCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Live, CacheDomains.Schedules }, ct);
+
+    public Task InvalidateTripLifecycleCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Live, CacheDomains.Recent, CacheDomains.Schedules }, ct);
+
+    public Task InvalidateCatalogCachesAsync(CancellationToken ct = default) =>
+        _cache.InvalidateDomainsAsync(new[] { CacheDomains.Stops, CacheDomains.Routes, CacheDomains.Fares, CacheDomains.Schedules, CacheDomains.Live, CacheDomains.Recent }, ct);
+
+    public Task InvalidateUserProfileCacheAsync(Guid userId, CancellationToken ct = default) =>
+        _cache.RemoveDirectAsync(TransitCacheService.UserProfileKey(userId), ct);
 }

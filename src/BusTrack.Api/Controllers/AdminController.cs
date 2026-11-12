@@ -81,6 +81,7 @@ public class AdminController : ControllerBase
         setting.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
         var created = await _tracking.MaterializeToday(ct);
+        await _tracking.InvalidateLiveAndScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "StartOperations", "System", "OperationsLive", $"Created {created} trips", ct);
         return Ok(new { operationsLive = true, tripsCreated = created, serviceDate = IndiaClock.Today().ToString("yyyy-MM-dd") });
     }
@@ -168,6 +169,7 @@ public class AdminController : ControllerBase
         };
         _db.Operators.Add(row);
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "Create", "Operator", row.Id.ToString(), row.Name, ct);
         return Ok(row);
     }
@@ -188,6 +190,7 @@ public class AdminController : ControllerBase
         row.Phone = Blank(request.Phone);
         row.Email = Blank(request.Email);
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return Ok(row);
     }
 
@@ -200,6 +203,7 @@ public class AdminController : ControllerBase
             return BadRequest(new { message = "Move or retire this operator's buses first." });
         row.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return NoContent();
     }
 
@@ -234,6 +238,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (deleted > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Operator", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
         return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} operator(s). {skipped} skipped.", reasons));
     }
@@ -264,6 +269,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (updated > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkUpdate", "Operator", string.Join(",", request.Ids), $"Updated {updated} operators", ct);
         return Ok(new BulkOperationResult(updated, ops.Count - updated, $"Updated {updated} operator(s)."));
     }
@@ -307,6 +313,7 @@ public class AdminController : ControllerBase
         };
         _db.Buses.Add(row);
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "Create", "Bus", row.Id.ToString(), row.RegistrationNumber, ct);
         return Ok(new { row.Id });
     }
@@ -326,6 +333,7 @@ public class AdminController : ControllerBase
         row.BusType = request.BusType.Trim();
         row.AssignedDriverId = request.AssignedDriverId;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return Ok(new { row.Id });
     }
 
@@ -338,6 +346,7 @@ public class AdminController : ControllerBase
             return BadRequest(new { message = "This bus is still on a schedule." });
         row.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return NoContent();
     }
 
@@ -372,6 +381,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (deleted > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Bus", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
         return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} bus(es). {skipped} skipped.", reasons));
     }
@@ -412,6 +422,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (updated > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkUpdate", "Bus", string.Join(",", request.Ids), $"Updated {updated} buses", ct);
         return Ok(new BulkOperationResult(updated, buses.Count - updated, $"Updated {updated} bus(es)."));
     }
@@ -511,6 +522,8 @@ public class AdminController : ControllerBase
             row.User.PasswordHash = _passwords.HashPassword(row.User, request.Password);
 
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateUserProfileCacheAsync(row.UserId, ct);
+        await _tracking.InvalidateLiveAndScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "Update", "Driver", row.Id.ToString(), code, ct);
         return Ok(new { row.Id, row.User.DriverCode });
     }
@@ -525,6 +538,8 @@ public class AdminController : ControllerBase
         row.IsActive = false;
         row.User.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateUserProfileCacheAsync(row.UserId, ct);
+        await _tracking.InvalidateLiveAndScheduleCachesAsync(ct);
         return NoContent();
     }
 
@@ -560,6 +575,9 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        foreach (var d in drivers.Where(d => !d.IsActive))
+            await _tracking.InvalidateUserProfileCacheAsync(d.UserId, ct);
+        if (deleted > 0) await _tracking.InvalidateLiveAndScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Driver", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
         return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} driver(s). {skipped} skipped.", reasons));
     }
@@ -598,6 +616,7 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> DeduplicateStops(CancellationToken ct)
     {
         var merged = await DbInitializer.DeduplicateStopsAsync(_db, null, ct);
+        if (merged > 0) await _tracking.InvalidateStopCachesAsync(ct);
         var active = await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct);
         var uniqueStops = StopNormalizer.DeduplicateStopsList(active);
         return Ok(new
@@ -637,6 +656,7 @@ public class AdminController : ControllerBase
         };
         _db.Stops.Add(row);
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateStopCachesAsync(ct);
         await _tracking.Audit(User.Id(), "Create", "Stop", row.Id.ToString(), row.Name, ct);
         return Ok(row);
     }
@@ -660,6 +680,7 @@ public class AdminController : ControllerBase
         await _db.SaveChangesAsync(ct);
         var routeIds = await _db.RouteStops.Where(rs => rs.StopId == id).Select(rs => rs.RouteId).Distinct().ToListAsync(ct);
         foreach (var routeId in routeIds) await _geometry.RebuildAsync(routeId, ct);
+        await _tracking.InvalidateStopCachesAsync(ct);
         return Ok(row);
     }
 
@@ -672,6 +693,7 @@ public class AdminController : ControllerBase
             return BadRequest(new { message = "Remove this stop from its routes first." });
         row.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateStopCachesAsync(ct);
         return NoContent();
     }
 
@@ -707,6 +729,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (deletedCount > 0) await _tracking.InvalidateStopCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Stop", string.Join(",", request.Ids), $"Deleted {deletedCount}, skipped {skippedCount}", ct);
         return Ok(new BulkDeleteResponse(deletedCount, skippedCount, $"Deleted {deletedCount} stop(s). {skippedCount} skipped.", skippedReasons));
     }
@@ -737,6 +760,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (updated > 0) await _tracking.InvalidateStopCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkUpdate", "Stop", string.Join(",", request.Ids), $"Updated {updated} stops", ct);
         return Ok(new BulkOperationResult(updated, stops.Count - updated, $"Updated {updated} stop(s)."));
     }
@@ -789,6 +813,7 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> RebuildRoadDistances(CancellationToken ct)
     {
         var count = await _geometry.RebuildAllRoutesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return Ok(new { count, message = $"Recalculated road geometry for {count} route(s)." });
     }
 
@@ -847,6 +872,7 @@ public class AdminController : ControllerBase
             if (tx is not null)
                 await tx.CommitAsync(ct);
 
+            await _tracking.InvalidateRouteCachesAsync(ct);
             return Ok(new { route.Id });
         }
         catch (DbUpdateException ex)
@@ -897,6 +923,7 @@ public class AdminController : ControllerBase
             slab.Amount = fare.Amount;
         }
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateFareCachesAsync(ct);
         return NoContent();
     }
 
@@ -909,6 +936,7 @@ public class AdminController : ControllerBase
             return BadRequest(new { message = "This route still has a schedule." });
         route.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateRouteCachesAsync(ct);
         return NoContent();
     }
 
@@ -943,6 +971,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (deleted > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Route", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
         return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} route(s). {skipped} skipped.", reasons));
     }
@@ -987,6 +1016,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (updated > 0) await _tracking.InvalidateRouteCachesAsync(ct);
         await _tracking.Audit(TryCurrentUserId(), "BulkUpdate", "Route", string.Join(",", request.Ids), $"Updated {updated} routes", ct);
         return Ok(new BulkOperationResult(updated, routes.Count - updated, $"Updated {updated} route(s)."));
     }
@@ -1034,6 +1064,7 @@ public class AdminController : ControllerBase
         };
         _db.Schedules.Add(row);
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "Create", "Schedule", row.Id.ToString(), row.DepartureTime.ToString("HH:mm"), ct);
         return Ok(new { row.Id });
     }
@@ -1051,6 +1082,7 @@ public class AdminController : ControllerBase
         row.DepartureTime = TimeOnly.Parse(request.DepartureTime);
         row.ServiceDays = string.IsNullOrWhiteSpace(request.ServiceDays) ? "1111111" : request.ServiceDays.Trim();
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateScheduleCachesAsync(ct);
         return Ok(new { row.Id });
     }
 
@@ -1063,6 +1095,7 @@ public class AdminController : ControllerBase
             return BadRequest(new { message = "End the running trip before removing this schedule." });
         row.IsActive = false;
         await _db.SaveChangesAsync(ct);
+        await _tracking.InvalidateScheduleCachesAsync(ct);
         return NoContent();
     }
 
@@ -1097,6 +1130,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (deleted > 0) await _tracking.InvalidateScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkDelete", "Schedule", string.Join(",", request.Ids), $"Deleted {deleted}, skipped {skipped}", ct);
         return Ok(new BulkDeleteResponse(deleted, skipped, $"Deleted {deleted} schedule(s). {skipped} skipped.", reasons));
     }
@@ -1132,6 +1166,7 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+        if (updated > 0) await _tracking.InvalidateScheduleCachesAsync(ct);
         await _tracking.Audit(User.Id(), "BulkUpdate", "Schedule", string.Join(",", request.Ids), $"Updated {updated} schedules", ct);
         return Ok(new BulkOperationResult(updated, schedules.Count - updated, $"Updated {updated} schedule(s)."));
     }

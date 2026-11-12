@@ -41,8 +41,7 @@ public class PassengerController : ControllerBase
     [HttpGet("stops")]
     public async Task<IActionResult> Stops(CancellationToken ct)
     {
-        var stops = await _db.Stops.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.Name).ToListAsync(ct);
-        var uniqueStops = StopNormalizer.DeduplicateStopsList(stops);
+        var uniqueStops = await _tracking.GetActiveStopsAsync(ct);
         return Ok(uniqueStops.Select(s => new
         {
             s.Id,
@@ -108,10 +107,17 @@ public class PassengerController : ControllerBase
         return Ok(liveList);
     }
 
-    [HttpGet("tracking/live")]
-    public async Task<IActionResult> TrackingLive(CancellationToken ct = default)
+    [HttpGet("tracking/filters")]
+    public async Task<IActionResult> TrackingFilters(CancellationToken ct = default)
     {
-        var items = await _tracking.GetLiveTrackingAsync(ct: ct);
+        var options = await _tracking.GetTrackingFilterOptionsAsync(ct);
+        return Ok(options);
+    }
+
+    [HttpGet("tracking/live")]
+    public async Task<IActionResult> TrackingLive([FromQuery(Name = "")] TrackingFilterQuery? query = null, CancellationToken ct = default)
+    {
+        var items = await _tracking.GetLiveTrackingAsync(filter: query?.ToFilterDto(), ct: ct);
         return Ok(items);
     }
 
@@ -119,9 +125,10 @@ public class PassengerController : ControllerBase
     public async Task<IActionResult> TrackingRecent(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9,
+        [FromQuery(Name = "")] TrackingFilterQuery? query = null,
         CancellationToken ct = default)
     {
-        var result = await _tracking.GetRecentTrackingAsync(page, pageSize, ct);
+        var result = await _tracking.GetRecentTrackingAsync(page, pageSize, query?.ToFilterDto(), ct);
         return Ok(result);
     }
 
@@ -130,32 +137,22 @@ public class PassengerController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9,
         [FromQuery] int daysAhead = 6,
+        [FromQuery(Name = "")] TrackingFilterQuery? query = null,
         CancellationToken ct = default)
     {
-        var result = await _tracking.GetUpcomingTrackingAsync(page, pageSize, daysAhead, ct: ct);
+        var result = await _tracking.GetUpcomingTrackingAsync(page, pageSize, daysAhead, filter: query?.ToFilterDto(), ct: ct);
         return Ok(result);
     }
 
     [HttpGet("routes")]
     public async Task<IActionResult> Routes(CancellationToken ct)
     {
-        var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
-        var routeIds = routes.Select(r => r.Id).ToList();
-        var routeStops = await _db.RouteStops.AsNoTracking()
-            .Where(rs => routeIds.Contains(rs.RouteId))
-            .Include(rs => rs.Stop)
-            .OrderBy(rs => rs.SequenceNo)
-            .ToListAsync(ct);
-
+        var catalog = await _tracking.GetActiveRouteCatalogAsync(ct);
         var runningBuses = await _tracking.LiveAsync(ct);
-        var result = new List<object>();
+        var result = new List<object>(catalog.Count);
 
-        foreach (var route in routes)
+        foreach (var route in catalog)
         {
-            var stops = routeStops.Where(rs => rs.RouteId == route.Id).OrderBy(rs => rs.SequenceNo).ToList();
-            if (stops.Count == 0) continue;
-
-            var path = await _tracking.LoadPath(route.Id, ct);
             var busesOnRoute = runningBuses.Where(b => b.RouteId == route.Id).ToList();
 
             result.Add(new
@@ -163,20 +160,20 @@ public class PassengerController : ControllerBase
                 route.Id,
                 route.Code,
                 route.Name,
-                distanceKm = route.DistanceKm ?? stops.LastOrDefault()?.DistanceFromOriginKm,
-                origin = stops.First().Stop.Name,
-                destination = stops.Last().Stop.Name,
-                stops = stops.Select(s => new
+                distanceKm = route.DistanceKm,
+                origin = route.Origin,
+                destination = route.Destination,
+                stops = route.Stops.Select(s => new
                 {
                     s.StopId,
-                    name = s.Stop.Name,
-                    code = s.Stop.Code,
+                    name = s.Name,
+                    code = s.Code,
                     s.SequenceNo,
-                    latitude = (double)s.Stop.Latitude,
-                    longitude = (double)s.Stop.Longitude,
-                    distanceKm = (double)s.DistanceFromOriginKm
+                    latitude = s.Latitude,
+                    longitude = s.Longitude,
+                    distanceKm = s.DistanceKm
                 }),
-                path = path.Select(p => new { latitude = p.Lat, longitude = p.Lng }),
+                path = route.Path.Select(p => new { latitude = p.Latitude, longitude = p.Longitude }),
                 liveCount = busesOnRoute.Count,
                 hasLiveBus = busesOnRoute.Count > 0,
                 runningBuses = busesOnRoute
@@ -324,5 +321,52 @@ public class PassengerController : ControllerBase
         foreach (var row in rows) row.IsRead = true;
         await _db.SaveChangesAsync(ct);
         return NoContent();
+    }
+}
+
+public sealed class TrackingFilterQuery
+{
+    public string? BusNumber { get; set; }
+    public int? RouteId { get; set; }
+    public string? Route { get; set; }
+    public DateOnly? Date { get; set; }
+    public int? OperatorId { get; set; }
+    public string? Operator { get; set; }
+    public string? BusType { get; set; }
+    public string? Status { get; set; }
+    public string? Stop { get; set; }
+    public string? TimeOfDay { get; set; }
+
+    public TrackingFilterDto? ToFilterDto()
+    {
+        var validRouteId = RouteId is > 0 ? RouteId : null;
+        var validOperatorId = OperatorId is > 0 ? OperatorId : null;
+
+        if (string.IsNullOrWhiteSpace(BusNumber)
+            && validRouteId is null
+            && string.IsNullOrWhiteSpace(Route)
+            && Date is null
+            && validOperatorId is null
+            && string.IsNullOrWhiteSpace(Operator)
+            && string.IsNullOrWhiteSpace(BusType)
+            && string.IsNullOrWhiteSpace(Status)
+            && string.IsNullOrWhiteSpace(Stop)
+            && string.IsNullOrWhiteSpace(TimeOfDay))
+        {
+            return null;
+        }
+
+        return new TrackingFilterDto(
+            BusNumber: BusNumber,
+            RouteId: validRouteId,
+            Route: Route,
+            Date: Date,
+            OperatorId: validOperatorId,
+            Operator: Operator,
+            BusType: BusType,
+            Status: Status,
+            Stop: Stop,
+            TimeOfDay: TimeOfDay
+        );
     }
 }

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
+using BusTrack.Api;
 using BusTrack.Api.Auth;
 using BusTrack.Api.Data;
 using BusTrack.Api.Hubs;
@@ -10,9 +11,40 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var redisConnectionString = new[]
+{
+    builder.Configuration["Redis:ConnectionString"],
+    builder.Configuration.GetConnectionString("Redis"),
+    Environment.GetEnvironmentVariable("REDIS_URL")
+}.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
+var redisInstanceName = builder.Configuration["Redis:InstanceName"];
+if (string.IsNullOrWhiteSpace(redisInstanceName))
+    redisInstanceName = "WhereIsMyBus:";
+var useRedis = !string.IsNullOrWhiteSpace(redisConnectionString);
+
+if (useRedis)
+{
+    var redisOptions = TransitCacheService.ParseRedisConfiguration(redisConnectionString!);
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.ConfigurationOptions = redisOptions;
+        options.InstanceName = redisInstanceName;
+    });
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
+
+builder.Services.AddSingleton<ITransitCache>(sp => new TransitCacheService(
+    sp.GetRequiredService<IDistributedCache>(),
+    sp.GetRequiredService<ILogger<TransitCacheService>>(),
+    useRedis));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
@@ -110,11 +142,27 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             OnTokenValidated = async context =>
             {
+                var cache = context.HttpContext.RequestServices.GetRequiredService<ITransitCache>();
                 var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
                 var idStr = context.Principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 if (Guid.TryParse(idStr, out var userId))
                 {
-                    var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+                    var ct = context.HttpContext.RequestAborted;
+                    var user = await cache.GetOrCreateDirectAsync(
+                        TransitCacheService.UserProfileKey(userId),
+                        CacheTtls.UserProfile,
+                        token => db.Users.AsNoTracking()
+                            .Where(u => u.Id == userId)
+                            .Select(u => new CachedUserProfileDto(
+                                u.Id,
+                                u.FullName,
+                                u.Email,
+                                u.Role,
+                                u.DriverCode,
+                                u.Phone,
+                                u.IsActive))
+                            .FirstOrDefaultAsync(token),
+                        ct);
                     if (user is null || !user.IsActive)
                     {
                         context.Fail("User account is inactive or disabled.");
@@ -202,7 +250,7 @@ app.MapGet("/api", () => Results.Ok(new
     documentation = "/swagger"
 }));
 
-app.MapGet("/api/health", async (AppDbContext db) =>
+app.MapGet("/api/health", async (AppDbContext db, ITransitCache cache) =>
 {
     var can = await db.Database.CanConnectAsync();
     var ops = await db.SystemSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "OperationsLive");
@@ -210,6 +258,7 @@ app.MapGet("/api/health", async (AppDbContext db) =>
     {
         status = can ? "ok" : "degraded",
         database = can,
+        cacheProvider = cache.IsRedisConfigured ? "Redis" : "Memory",
         operationsLive = string.Equals(ops?.Value, "true", StringComparison.OrdinalIgnoreCase)
     });
 });

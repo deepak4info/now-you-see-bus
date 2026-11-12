@@ -133,6 +133,26 @@ export type PaginatedBusTracking = {
   hasMore: boolean;
 };
 
+export type TrackingFilterOperatorOption = {
+  id: number;
+  name: string;
+  code: string;
+};
+
+export type TrackingFilterRouteOption = {
+  id: number;
+  code: string;
+  name: string;
+  originStop: string;
+  destinationStop: string;
+};
+
+export type TrackingFilterOptions = {
+  operators: TrackingFilterOperatorOption[];
+  routes: TrackingFilterRouteOption[];
+  busTypes: string[];
+};
+
 export type Favorite = {
   id: number;
   busId: number | null;

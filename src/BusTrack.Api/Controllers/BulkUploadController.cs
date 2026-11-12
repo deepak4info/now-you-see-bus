@@ -122,6 +122,7 @@ public class BulkUploadController : ControllerBase
             var result = await ExecuteCommitAsync(session, updateExisting, ct);
             session.Status = "Completed";
             session.CommitResult = result;
+            await _tracking.InvalidateCatalogCachesAsync(ct);
 
             await _tracking.Audit(
                 GetCurrentUserId(),
@@ -447,6 +448,7 @@ public class BulkUploadController : ControllerBase
             if (deleted > 0)
             {
                 await _db.SaveChangesAsync(ct);
+                await _tracking.InvalidateCatalogCachesAsync(ct);
             }
 
             var auditEntityId = codes.Count == 1 ? (codes[0].Length > 40 ? codes[0][..40] : codes[0]) : $"{codes.Count} {normalizedType}"[..Math.Min(40, $"{codes.Count} {normalizedType}".Length)];

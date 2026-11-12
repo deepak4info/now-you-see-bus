@@ -237,3 +237,90 @@ public record PaginatedBusTrackingDto(
     bool HasMore
 );
 
+public record TrackingFilterDto(
+    string? BusNumber = null,
+    int? RouteId = null,
+    string? Route = null,
+    DateOnly? Date = null,
+    int? OperatorId = null,
+    string? Operator = null,
+    string? BusType = null,
+    string? Status = null,
+    string? Stop = null,
+    string? TimeOfDay = null
+);
+
+public record TrackingFilterOperatorOptionDto(int Id, string Name, string Code);
+
+public record TrackingFilterRouteOptionDto(
+    int Id,
+    string Code,
+    string Name,
+    string OriginStop,
+    string DestinationStop
+);
+
+public record TrackingFilterOptionsDto(
+    List<TrackingFilterOperatorOptionDto> Operators,
+    List<TrackingFilterRouteOptionDto> Routes,
+    List<string> BusTypes
+);
+
+public record CachedStopDto(
+    int Id,
+    string Name,
+    string Code,
+    string? City,
+    string? Address,
+    decimal Latitude,
+    decimal Longitude
+);
+
+public record CachedRouteStopDto(
+    int Id,
+    int RouteId,
+    int StopId,
+    int SequenceNo,
+    decimal DistanceFromOriginKm,
+    decimal? SegmentDistanceKm,
+    string StopName,
+    string StopCode,
+    decimal StopLatitude,
+    decimal StopLongitude
+);
+
+public record CachedFareSlabDto(int FromStopId, int ToStopId, decimal Amount);
+
+public record CachedActiveRouteStopDto(
+    int StopId,
+    string Name,
+    string Code,
+    int SequenceNo,
+    double Latitude,
+    double Longitude,
+    double DistanceKm
+);
+
+public record CachedActiveRoutePointDto(double Latitude, double Longitude);
+
+public record CachedActiveRouteDto(
+    int Id,
+    string Code,
+    string Name,
+    decimal? DistanceKm,
+    string Origin,
+    string Destination,
+    List<CachedActiveRouteStopDto> Stops,
+    List<CachedActiveRoutePointDto> Path
+);
+
+public record CachedUserProfileDto(
+    Guid Id,
+    string FullName,
+    string Email,
+    string Role,
+    string? DriverCode,
+    string? Phone,
+    bool IsActive
+);
+
