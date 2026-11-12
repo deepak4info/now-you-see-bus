@@ -10,15 +10,22 @@ namespace BusTrack.Api.Services;
 public class TrackingService
 {
     private static readonly ConcurrentDictionary<int, SemaphoreSlim> TripGates = new();
+    private static readonly ConcurrentDictionary<int, (int DelayMinutes, DateTime NotifiedAtUtc)> DelayAlertStates = new();
     private readonly AppDbContext _db;
     private readonly IHubContext<TrackingHub> _hub;
     private readonly ITransitCache _cache;
+    private readonly IShardedDataService _shards;
 
-    public TrackingService(AppDbContext db, IHubContext<TrackingHub> hub, ITransitCache? cache = null)
+    public TrackingService(
+        AppDbContext db,
+        IHubContext<TrackingHub> hub,
+        ITransitCache? cache = null,
+        IShardedDataService? shards = null)
     {
         _db = db;
         _hub = hub;
         _cache = cache ?? NullTransitCache.Instance;
+        _shards = shards ?? NullShardedDataService.Instance;
     }
 
     public async Task<bool> OperationsAreLive(CancellationToken ct = default)
@@ -153,6 +160,312 @@ public class TrackingService
         return new RouteSearchResultDto(fromStop.Name, toStop.Name, effectiveDate, requestedDate, showingNextDate, results);
     }
 
+    public async Task<MultiRoutePlanDto> PlanJourneyAsync(
+        string from,
+        string to,
+        DateOnly requestedDate,
+        DateTime? nowIstOverride = null,
+        CancellationToken ct = default)
+    {
+        var fromStop = await FindStop(from, ct);
+        var toStop = await FindStop(to, ct);
+        if (fromStop is null || toStop is null || fromStop.Id == toStop.Id)
+            return new MultiRoutePlanDto(from.Trim(), to.Trim(), requestedDate, false, new(), new(), new());
+
+        var nowIst = nowIstOverride ?? IndiaClock.Now();
+        var today = DateOnly.FromDateTime(nowIst);
+
+        var plan = await ExecutePlanJourneyAsync(fromStop, toStop, requestedDate, nowIst, ct);
+        if (plan.AllOptions.Count == 0 && requestedDate == today && !nowIstOverride.HasValue)
+        {
+            var tomorrow = requestedDate.AddDays(1);
+            var nextDayPlan = await ExecutePlanJourneyAsync(fromStop, toStop, tomorrow, nowIst, ct);
+            if (nextDayPlan.AllOptions.Count > 0)
+                return nextDayPlan;
+        }
+
+        return plan;
+    }
+
+    private async Task<MultiRoutePlanDto> ExecutePlanJourneyAsync(
+        Stop fromStop,
+        Stop toStop,
+        DateOnly date,
+        DateTime nowIst,
+        CancellationToken ct)
+    {
+        var day = IndiaClock.DayIndex(date);
+        var today = DateOnly.FromDateTime(nowIst);
+
+        var allRoutes = await _db.Routes.AsNoTracking()
+            .Where(r => r.IsActive)
+            .Include(r => r.Operator)
+            .ToListAsync(ct);
+
+        var allRouteStops = await _db.RouteStops.AsNoTracking()
+            .Include(rs => rs.Stop)
+            .Where(rs => rs.Stop != null && rs.Stop.IsActive)
+            .OrderBy(rs => rs.RouteId)
+            .ThenBy(rs => rs.SequenceNo)
+            .ToListAsync(ct);
+
+        var stopsByRoute = allRouteStops
+            .GroupBy(rs => rs.RouteId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.SequenceNo).ToList());
+
+        var schedulesByRoute = (await _db.Schedules.AsNoTracking()
+            .Include(s => s.Bus!).ThenInclude(b => b.Operator)
+            .Include(s => s.Route)
+            .Where(s => s.IsActive && s.BusId != null)
+            .ToListAsync(ct))
+            .Where(s => RunsOn(s.ServiceDays, day))
+            .GroupBy(s => s.RouteId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.DepartureTime).ToList());
+
+        var routeLookup = allRoutes.ToDictionary(r => r.Id);
+        var fareCache = new Dictionary<(int RouteId, int FromId, int ToId), decimal>();
+
+        async Task<decimal> ResolveLegFareAsync(int routeId, int fId, int tId, double distKm)
+        {
+            if (fareCache.TryGetValue((routeId, fId, tId), out var cached)) return cached;
+            var explicitFare = await FareBetween(routeId, fId, tId, ct);
+            var resolved = explicitFare ?? Math.Max(15m, Math.Round((decimal)distKm * 1.25m, 0));
+            fareCache[(routeId, fId, tId)] = resolved;
+            return resolved;
+        }
+
+        List<(Schedule Schedule, DateTime BoardIst, DateTime AlightIst, int DurationMin, double DistKm, string Status)> BuildLegSlots(
+            int routeId,
+            RouteStop originRs,
+            RouteStop destRs)
+        {
+            if (!schedulesByRoute.TryGetValue(routeId, out var routeSchedules))
+                return new();
+
+            var distKm = Math.Max(1.0, (double)(destRs.DistanceFromOriginKm - originRs.DistanceFromOriginKm));
+            var boardOffsetMin = Geo.EtaMinutes((double)originRs.DistanceFromOriginKm);
+            var durationMin = Math.Max(10, Geo.EtaMinutes(distKm));
+
+            var slots = new List<(Schedule, DateTime, DateTime, int, double, string)>();
+            foreach (var sched in routeSchedules)
+            {
+                var boardIst = date.ToDateTime(sched.DepartureTime).AddMinutes(boardOffsetMin);
+                if (date == today && boardIst <= nowIst)
+                    continue;
+                var alightIst = boardIst.AddMinutes(durationMin);
+                slots.Add((sched, boardIst, alightIst, durationMin, distKm, "Scheduled"));
+            }
+            return slots;
+        }
+
+        // 1. Direct options (0 transfers)
+        var directOptions = new List<JourneyOptionDto>();
+        foreach (var route in allRoutes)
+        {
+            if (!stopsByRoute.TryGetValue(route.Id, out var rStops)) continue;
+            var originRs = rStops.FirstOrDefault(rs => rs.StopId == fromStop.Id);
+            var destRs = rStops.FirstOrDefault(rs => rs.StopId == toStop.Id);
+            if (originRs is null || destRs is null || originRs.SequenceNo >= destRs.SequenceNo) continue;
+
+            var fare = await ResolveLegFareAsync(route.Id, fromStop.Id, toStop.Id, (double)(destRs.DistanceFromOriginKm - originRs.DistanceFromOriginKm));
+            var slots = BuildLegSlots(route.Id, originRs, destRs);
+            foreach (var slot in slots)
+            {
+                var depStr = slot.BoardIst.ToString("HH:mm");
+                var arrStr = slot.AlightIst.ToString("HH:mm");
+                var leg = new JourneyLegDto(
+                    RouteId: route.Id,
+                    RouteCode: route.Code,
+                    RouteName: route.Name,
+                    ScheduleId: slot.Schedule.Id,
+                    TripId: null,
+                    FleetNumber: slot.Schedule.Bus?.FleetNumber,
+                    BusType: slot.Schedule.Bus?.BusType,
+                    OperatorName: slot.Schedule.Bus?.Operator?.Name ?? route.Operator?.Name,
+                    FromStop: originRs.Stop!.Name,
+                    ToStop: destRs.Stop!.Name,
+                    DepartureTime: depStr,
+                    ArrivalTime: arrStr,
+                    DurationMinutes: slot.DurationMin,
+                    EstimatedFare: fare,
+                    DistanceKm: Math.Round(slot.DistKm, 1),
+                    Status: slot.Status
+                );
+                directOptions.Add(new JourneyOptionDto(
+                    OptionId: $"direct-{route.Id}-{slot.Schedule.Id}",
+                    IsDirect: true,
+                    TransfersCount: 0,
+                    TransferStops: new(),
+                    DepartureTime: depStr,
+                    ArrivalTime: arrStr,
+                    TotalJourneyMinutes: slot.DurationMin,
+                    TotalWaitMinutes: 0,
+                    EstimatedTotalFare: fare,
+                    TotalDistanceKm: Math.Round(slot.DistKm, 1),
+                    Legs: new List<JourneyLegDto> { leg },
+                    Summary: $"Direct bus on Route {route.Code} ({originRs.Stop.Name} → {destRs.Stop.Name})"
+                ));
+            }
+        }
+
+        // 2. 1-Transfer multi-route options (e.g. Bhuna -> Hisar -> Delhi)
+        var transferOptions = new List<JourneyOptionDto>();
+        var firstLegCandidates = new List<(Data.Route Route, RouteStop OriginRs, RouteStop HubRs)>();
+        var secondLegCandidates = new List<(Data.Route Route, RouteStop HubRs, RouteStop DestRs)>();
+
+        foreach (var route in allRoutes)
+        {
+            if (!stopsByRoute.TryGetValue(route.Id, out var rStops)) continue;
+
+            var oRs = rStops.FirstOrDefault(rs => rs.StopId == fromStop.Id);
+            if (oRs is not null)
+            {
+                foreach (var rs in rStops.Where(rs => rs.SequenceNo > oRs.SequenceNo))
+                {
+                    if (rs.StopId != toStop.Id)
+                        firstLegCandidates.Add((route, oRs, rs));
+                }
+            }
+
+            var dRs = rStops.FirstOrDefault(rs => rs.StopId == toStop.Id);
+            if (dRs is not null)
+            {
+                foreach (var rs in rStops.Where(rs => rs.SequenceNo < dRs.SequenceNo))
+                {
+                    if (rs.StopId != fromStop.Id)
+                        secondLegCandidates.Add((route, rs, dRs));
+                }
+            }
+        }
+
+        var seenPairs = new HashSet<string>();
+        foreach (var leg1 in firstLegCandidates)
+        {
+            foreach (var leg2 in secondLegCandidates)
+            {
+                if (leg1.Route.Id == leg2.Route.Id) continue;
+                if (!AreTransferHubsCompatible(leg1.HubRs.Stop!, leg2.HubRs.Stop!)) continue;
+
+                var leg1Dist = (double)(leg1.HubRs.DistanceFromOriginKm - leg1.OriginRs.DistanceFromOriginKm);
+                var leg2Dist = (double)(leg2.DestRs.DistanceFromOriginKm - leg2.HubRs.DistanceFromOriginKm);
+                var fare1 = await ResolveLegFareAsync(leg1.Route.Id, leg1.OriginRs.StopId, leg1.HubRs.StopId, leg1Dist);
+                var fare2 = await ResolveLegFareAsync(leg2.Route.Id, leg2.HubRs.StopId, leg2.DestRs.StopId, leg2Dist);
+
+                var leg1Slots = BuildLegSlots(leg1.Route.Id, leg1.OriginRs, leg1.HubRs);
+                var leg2Slots = BuildLegSlots(leg2.Route.Id, leg2.HubRs, leg2.DestRs);
+
+                foreach (var s1 in leg1Slots)
+                {
+                    // Pick the earliest connecting bus arriving after s1 with at least 10 min transfer buffer & max 240 min layover
+                    var matchingS2 = leg2Slots
+                        .Where(s2 =>
+                        {
+                            var wait = (s2.BoardIst - s1.AlightIst).TotalMinutes;
+                            return wait >= 10 && wait <= 240;
+                        })
+                        .OrderBy(s2 => s2.BoardIst)
+                        .FirstOrDefault();
+
+                    if (matchingS2.Schedule is null) continue;
+
+                    var dedupKey = $"{s1.Schedule.Id}-{matchingS2.Schedule.Id}-{leg1.HubRs.StopId}";
+                    if (!seenPairs.Add(dedupKey)) continue;
+
+                    var waitMin = (int)Math.Round((matchingS2.BoardIst - s1.AlightIst).TotalMinutes);
+                    var totalMin = s1.DurationMin + waitMin + matchingS2.DurationMin;
+                    var totalDist = Math.Round(s1.DistKm + matchingS2.DistKm, 1);
+                    var hubName = leg1.HubRs.Stop!.Name;
+
+                    var leg1Dto = new JourneyLegDto(
+                        RouteId: leg1.Route.Id,
+                        RouteCode: leg1.Route.Code,
+                        RouteName: leg1.Route.Name,
+                        ScheduleId: s1.Schedule.Id,
+                        TripId: null,
+                        FleetNumber: s1.Schedule.Bus?.FleetNumber,
+                        BusType: s1.Schedule.Bus?.BusType,
+                        OperatorName: s1.Schedule.Bus?.Operator?.Name ?? leg1.Route.Operator?.Name,
+                        FromStop: leg1.OriginRs.Stop!.Name,
+                        ToStop: hubName,
+                        DepartureTime: s1.BoardIst.ToString("HH:mm"),
+                        ArrivalTime: s1.AlightIst.ToString("HH:mm"),
+                        DurationMinutes: s1.DurationMin,
+                        EstimatedFare: fare1,
+                        DistanceKm: Math.Round(s1.DistKm, 1),
+                        Status: s1.Status
+                    );
+
+                    var leg2Dto = new JourneyLegDto(
+                        RouteId: leg2.Route.Id,
+                        RouteCode: leg2.Route.Code,
+                        RouteName: leg2.Route.Name,
+                        ScheduleId: matchingS2.Schedule.Id,
+                        TripId: null,
+                        FleetNumber: matchingS2.Schedule.Bus?.FleetNumber,
+                        BusType: matchingS2.Schedule.Bus?.BusType,
+                        OperatorName: matchingS2.Schedule.Bus?.Operator?.Name ?? leg2.Route.Operator?.Name,
+                        FromStop: leg2.HubRs.Stop!.Name,
+                        ToStop: leg2.DestRs.Stop!.Name,
+                        DepartureTime: matchingS2.BoardIst.ToString("HH:mm"),
+                        ArrivalTime: matchingS2.AlightIst.ToString("HH:mm"),
+                        DurationMinutes: matchingS2.DurationMin,
+                        EstimatedFare: fare2,
+                        DistanceKm: Math.Round(matchingS2.DistKm, 1),
+                        Status: matchingS2.Status
+                    );
+
+                    transferOptions.Add(new JourneyOptionDto(
+                        OptionId: $"xfer-{s1.Schedule.Id}-{matchingS2.Schedule.Id}",
+                        IsDirect: false,
+                        TransfersCount: 1,
+                        TransferStops: new List<string> { hubName },
+                        DepartureTime: leg1Dto.DepartureTime,
+                        ArrivalTime: leg2Dto.ArrivalTime,
+                        TotalJourneyMinutes: totalMin,
+                        TotalWaitMinutes: waitMin,
+                        EstimatedTotalFare: fare1 + fare2,
+                        TotalDistanceKm: totalDist,
+                        Legs: new List<JourneyLegDto> { leg1Dto, leg2Dto },
+                        Summary: $"{fromStop.Name} → {hubName} → {toStop.Name} (1 transfer · {waitMin} min wait)"
+                    ));
+                }
+            }
+        }
+
+        directOptions = directOptions
+            .OrderBy(o => o.TotalJourneyMinutes)
+            .ThenBy(o => o.DepartureTime)
+            .ToList();
+
+        transferOptions = transferOptions
+            .OrderBy(o => o.TotalJourneyMinutes)
+            .ThenBy(o => o.DepartureTime)
+            .Take(8)
+            .ToList();
+
+        var allOptions = directOptions.Concat(transferOptions).ToList();
+        return new MultiRoutePlanDto(
+            From: fromStop.Name,
+            To: toStop.Name,
+            Date: date,
+            DirectAvailable: directOptions.Count > 0,
+            DirectOptions: directOptions,
+            TransferOptions: transferOptions,
+            AllOptions: allOptions
+        );
+    }
+
+    private static bool AreTransferHubsCompatible(Stop a, Stop b)
+    {
+        if (a.Id == b.Id) return true;
+        if (!string.IsNullOrWhiteSpace(a.City) && !string.IsNullOrWhiteSpace(b.City) &&
+            a.City.Trim().Equals(b.City.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return Geo.HaversineKm((double)a.Latitude, (double)a.Longitude, (double)b.Latitude, (double)b.Longitude) <= 5.0;
+        }
+        return Geo.HaversineKm((double)a.Latitude, (double)a.Longitude, (double)b.Latitude, (double)b.Longitude) <= 2.5;
+    }
+
     private async Task<List<TrackSnapshotDto>> FindUpcomingForDateAsync(
         Stop fromStop,
         Stop toStop,
@@ -231,6 +544,10 @@ public class TrackingService
             var specificTrip = await QueryTrips().FirstOrDefaultAsync(t => t.Id == explicitTripId && t.BusId == bus.Id, ct);
             if (specificTrip is not null)
                 return await BuildSnapshot(specificTrip, from, to, ct);
+
+            var archivedSnap = await _shards.FindArchivedTripSnapshotAsync(explicitTripId, bus.Id, ct);
+            if (archivedSnap is not null)
+                return archivedSnap;
         }
 
         List<int>? legRouteIds = null;
@@ -290,7 +607,10 @@ public class TrackingService
     public async Task<TrackSnapshotDto?> GetTripAsync(int tripId, CancellationToken ct = default)
     {
         var trip = await QueryTrips().FirstOrDefaultAsync(t => t.Id == tripId, ct);
-        return trip is null ? null : await BuildSnapshot(trip, null, null, ct);
+        if (trip is not null)
+            return await BuildSnapshot(trip, null, null, ct);
+
+        return await _shards.FindArchivedTripSnapshotAsync(tripId, null, ct);
     }
 
     public Task<List<TrackSnapshotDto>> LiveAsync(CancellationToken ct = default) =>
@@ -525,18 +845,81 @@ public class TrackingService
 
         recentQuery = ApplyTripFilters(recentQuery, filter);
 
-        var totalCount = await recentQuery.CountAsync(ct);
-        if (totalCount == 0)
-            return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+        var primaryCount = await recentQuery.LongCountAsync(ct);
 
-        var trips = await recentQuery
-            .OrderByDescending(t => t.ServiceDate)
-            .ThenByDescending(t => t.EndedAt ?? t.StartedAt)
-            .ThenByDescending(t => t.Schedule.DepartureTime)
-            .ThenByDescending(t => t.Id)
+        List<Trip> trips;
+        List<BusTrackingItemDto> archivedItems = new();
+        long archivedCount = 0;
+
+        if (!_shards.IsEnabled)
+        {
+            if (primaryCount == 0)
+                return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+
+            trips = await recentQuery
+                .OrderByDescending(t => t.ServiceDate)
+                .ThenByDescending(t => t.EndedAt ?? t.StartedAt)
+                .ThenByDescending(t => t.Schedule.DepartureTime)
+                .ThenByDescending(t => t.Id)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(ct);
+        }
+        else
+        {
+            var topK = page * pageSize;
+            trips = primaryCount == 0
+                ? new()
+                : await recentQuery
+                    .OrderByDescending(t => t.ServiceDate)
+                    .ThenByDescending(t => t.EndedAt ?? t.StartedAt)
+                    .ThenByDescending(t => t.Schedule.DepartureTime)
+                    .ThenByDescending(t => t.Id)
+                    .Take(topK)
+                    .ToListAsync(ct);
+
+            (archivedCount, archivedItems) = await _shards.QueryArchivedTripsAsync(filter, statusFilter, topK, ct);
+            if (primaryCount == 0 && archivedCount == 0)
+                return new PaginatedBusTrackingDto(new(), page, pageSize, 0, false);
+        }
+
+        var items = await MaterializeRecentItemsAsync(trips, ct);
+        if (!_shards.IsEnabled)
+        {
+            var total = (int)Math.Min(int.MaxValue, primaryCount);
+            return new PaginatedBusTrackingDto(items, page, pageSize, total, page * pageSize < total);
+        }
+
+        var merged = new Dictionary<int, BusTrackingItemDto>();
+        foreach (var item in items)
+        {
+            if (item.TripId is int tid)
+                merged[tid] = item;
+        }
+
+        var overlap = 0;
+        foreach (var archived in archivedItems)
+        {
+            if (archived.TripId is int atid && !merged.TryAdd(atid, archived))
+                overlap++;
+        }
+
+        var combinedTotal = (int)Math.Min(int.MaxValue, Math.Max(0, primaryCount + archivedCount - overlap));
+        var pagedItems = merged.Values
+            .OrderByDescending(i => i.ServiceDate)
+            .ThenByDescending(i => i.RecordedAt ?? DateTime.MinValue)
+            .ThenByDescending(i => TimeOnly.TryParse(i.DepartureTime, out var dep) ? dep : TimeOnly.MinValue)
+            .ThenByDescending(i => i.TripId)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToListAsync(ct);
+            .ToList();
+
+        return new PaginatedBusTrackingDto(pagedItems, page, pageSize, combinedTotal, page * pageSize < combinedTotal);
+    }
+
+    private async Task<List<BusTrackingItemDto>> MaterializeRecentItemsAsync(List<Trip> trips, CancellationToken ct)
+    {
+        if (trips.Count == 0) return new();
 
         var routeIds = trips.Select(t => t.RouteId).Distinct().ToList();
         var tripIds = trips.Select(t => t.Id).ToList();
@@ -612,7 +995,7 @@ public class TrackingService
             ));
         }
 
-        return new PaginatedBusTrackingDto(items, page, pageSize, totalCount, page * pageSize < totalCount);
+        return items;
     }
 
     public async Task<PaginatedBusTrackingDto> GetUpcomingTrackingAsync(
@@ -910,7 +1293,7 @@ public class TrackingService
         return query;
     }
 
-    private static (TimeOnly? Start, TimeOnly? End) ResolveTimeWindow(string? timeOfDay) =>
+    internal static (TimeOnly? Start, TimeOnly? End) ResolveTimeWindow(string? timeOfDay) =>
         timeOfDay?.Trim().ToLowerInvariant() switch
         {
             "morning" => (new TimeOnly(0, 0), new TimeOnly(12, 0)),
@@ -987,7 +1370,8 @@ public class TrackingService
             RecordedAt: snap.RecordedAt,
             Latitude: snap.Latitude,
             Longitude: snap.Longitude,
-            OperationsLive: snap.OperationsLive
+            OperationsLive: snap.OperationsLive,
+            SpeedKmph: snap.SpeedKmph
         );
 
     public async Task<TrackSnapshotDto?> GetRouteSnapshotAsync(int routeId, CancellationToken ct = default)
@@ -1151,19 +1535,34 @@ public class TrackingService
 
         if (!keepSimulation) trip.Simulation = false;
 
-        _db.GpsPings.Add(new GpsPing
-        {
-            TripId = trip.Id,
-            Latitude = decimal.Round((decimal)lat, 6),
-            Longitude = decimal.Round((decimal)lng, 6),
-            SpeedKmph = speed is null ? null : decimal.Round((decimal)speed.Value, 2),
-            Heading = heading is null ? null : decimal.Round((decimal)heading.Value, 2),
-            RecordedAt = DateTime.UtcNow,
-            ReceivedAt = DateTime.UtcNow
-        });
-
         var routeStops = await LoadRouteStops(trip.RouteId, ct);
         var path = await LoadPath(trip.RouteId, ct);
+        var routeLatHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Latitude : null;
+        var routeLngHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Longitude : null;
+        var pingLat = decimal.Round((decimal)lat, 6);
+        var pingLng = decimal.Round((decimal)lng, 6);
+        decimal? pingSpeed = speed is null ? null : decimal.Round((decimal)speed.Value, 2);
+        decimal? pingHeading = heading is null ? null : decimal.Round((decimal)heading.Value, 2);
+        var nowUtc = DateTime.UtcNow;
+
+        var wroteToShard = await _shards.TryRecordGpsPingAsync(
+            trip.Id, trip.RouteId, trip.BusId,
+            pingLat, pingLng, pingSpeed, pingHeading,
+            nowUtc, nowUtc,
+            routeLatHint, routeLngHint, ct);
+        if (!wroteToShard)
+        {
+            _db.GpsPings.Add(new GpsPing
+            {
+                TripId = trip.Id,
+                Latitude = pingLat,
+                Longitude = pingLng,
+                SpeedKmph = pingSpeed,
+                Heading = pingHeading,
+                RecordedAt = nowUtc,
+                ReceivedAt = nowUtc
+            });
+        }
         var pathDistance = path.Count == 0 ? 0 : Geo.Project(new LatLng(lat, lng), path).DistanceAlongKm;
         var along = RouteDistanceAtPathDistance(routeStops, path, pathDistance);
         var displaySpeed = keepSimulation ? (double?)null : speed;
@@ -1200,6 +1599,8 @@ public class TrackingService
 
         var snap = await BuildSnapshot(trip, null, null, ct);
         await Publish(snap, ct);
+        await MaybeNotifyDelayAsync(trip, snap, ct);
+        await MaybeTriggerStopRemindersAsync(trip, snap, etas, ct);
         return snap;
     }
 
@@ -1389,6 +1790,122 @@ public class TrackingService
         if (userIds.Count > 0) await _db.SaveChangesAsync(ct);
     }
 
+    private async Task MaybeNotifyDelayAsync(Trip trip, TrackSnapshotDto snap, CancellationToken ct)
+    {
+        if (trip.Status != "Running" || snap.DelayMinutes is not int delayMins || delayMins < 5)
+            return;
+
+        var now = DateTime.UtcNow;
+        var shouldNotify = true;
+        if (DelayAlertStates.TryGetValue(trip.Id, out var prev))
+        {
+            var worsenedSignificantly = delayMins - prev.DelayMinutes >= 10;
+            var cooldownElapsed = (now - prev.NotifiedAtUtc).TotalMinutes >= 15;
+            shouldNotify = worsenedSignificantly && cooldownElapsed;
+        }
+        if (!shouldNotify)
+            return;
+
+        DelayAlertStates[trip.Id] = (delayMins, now);
+        var etaInfo = snap.EstimatedArrivalTime is { Length: > 0 } eta
+            ? $" Updated arrival estimate: {eta}."
+            : "";
+        var stopInfo = snap.NextStop is { Length: > 0 } next
+            ? $" Approaching {next}."
+            : "";
+        var title = $"Bus {snap.FleetNumber} delayed by {delayMins} min";
+        var body = $"Route {snap.RouteCode} ({snap.RouteName}) is running {delayMins} min behind schedule.{stopInfo}{etaInfo}";
+
+        await Notify(trip, "delayed", title, body, ct);
+        await BroadcastToTripGroupsAsync(
+            snap,
+            "delayAlert",
+            new
+            {
+                tripId = trip.Id,
+                fleetNumber = snap.FleetNumber,
+                routeCode = snap.RouteCode,
+                routeName = snap.RouteName,
+                delayMinutes = delayMins,
+                nextStop = snap.NextStop,
+                estimatedArrivalTime = snap.EstimatedArrivalTime,
+                recordedAt = snap.RecordedAt,
+                title,
+                message = body
+            },
+            ct);
+    }
+
+    private async Task MaybeTriggerStopRemindersAsync(Trip trip, TrackSnapshotDto snap, List<TripStopEta> etas, CancellationToken ct)
+    {
+        if (trip.Status != "Running") return;
+
+        var pending = await _db.StopReminders
+            .Where(r => !r.IsTriggered
+                && r.RouteId == trip.RouteId
+                && r.TargetDate == trip.ServiceDate
+                && (r.TripId == null || r.TripId == trip.Id))
+            .ToListAsync(ct);
+
+        if (pending.Count == 0) return;
+
+        var etaByStop = etas.ToDictionary(e => e.StopId);
+        var anyTriggered = false;
+
+        foreach (var reminder in pending)
+        {
+            if (!etaByStop.TryGetValue(reminder.StopId, out var etaRow)) continue;
+            if (etaRow.Status is "Departed") continue;
+
+            var etaMins = etaRow.EtaMinutes;
+            var approaching = etaMins is >= 0 && etaMins.Value <= reminder.RemindBeforeMinutes;
+            var arrivedNow = etaRow.Status is "Current" or "Arrived";
+            if (!approaching && !arrivedNow) continue;
+
+            reminder.IsTriggered = true;
+            reminder.TriggeredAt = DateTime.UtcNow;
+            anyTriggered = true;
+
+            var etaText = arrivedNow || etaMins is <= 0
+                ? $"arriving now at {reminder.StopName}"
+                : $"about {etaMins} min from {reminder.StopName}";
+            var title = $"Bus {snap.FleetNumber} {etaText}";
+            var body = $"Stop arrival reminder for {reminder.StopName} on Route {snap.RouteCode} ({snap.RouteName}).";
+
+            _db.Notifications.Add(new Notification
+            {
+                UserId = reminder.UserId,
+                TripId = trip.Id,
+                Title = title,
+                Body = body,
+                Kind = "reminder",
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await BroadcastToTripGroupsAsync(
+                snap,
+                "stopReminder",
+                new
+                {
+                    reminderId = reminder.Id,
+                    userId = reminder.UserId,
+                    tripId = trip.Id,
+                    fleetNumber = snap.FleetNumber,
+                    routeId = trip.RouteId,
+                    routeCode = snap.RouteCode,
+                    stopId = reminder.StopId,
+                    stopName = reminder.StopName,
+                    etaMinutes = etaMins ?? 0,
+                    title,
+                    message = body
+                },
+                ct);
+        }
+
+        if (anyTriggered)
+            await _db.SaveChangesAsync(ct);
+    }
+
     public async Task Audit(Guid? userId, string action, string entity, string? entityId, string? detail, CancellationToken ct = default)
     {
         if (entityId != null && entityId.Length > 40)
@@ -1400,7 +1917,7 @@ public class TrackingService
         if (entity != null && entity.Length > 80)
             entity = entity[..80];
 
-        _db.AuditLogs.Add(new AuditLog
+        var entry = new AuditLog
         {
             UserId = userId,
             Action = action ?? "",
@@ -1408,8 +1925,27 @@ public class TrackingService
             EntityId = entityId,
             Detail = detail,
             CreatedAt = DateTime.UtcNow
-        });
-        await _db.SaveChangesAsync(ct);
+        };
+        var wroteToShard = await _shards.TryRecordAuditAsync(entry, null, ct);
+        if (!wroteToShard)
+        {
+            _db.AuditLogs.Add(entry);
+            await _db.SaveChangesAsync(ct);
+        }
+    }
+
+    private async Task<GpsPing?> GetLatestGpsPingForTripAsync(int tripId, List<RouteStop> routeStops, CancellationToken ct)
+    {
+        var latHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Latitude : null;
+        var lngHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Longitude : null;
+        var shardPing = await _shards.GetLatestGpsPingAsync(tripId, latHint, lngHint, ct);
+        if (shardPing is not null) return shardPing;
+
+        return await _db.GpsPings.AsNoTracking()
+            .Where(p => p.TripId == tripId)
+            .OrderByDescending(p => p.RecordedAt)
+            .ThenByDescending(p => p.Id)
+            .FirstOrDefaultAsync(ct);
     }
 
     private async Task CompleteCore(Trip trip, Guid? userId, CancellationToken ct)
@@ -1418,6 +1954,7 @@ public class TrackingService
         trip.Status = "Completed";
         trip.EndedAt = DateTime.UtcNow;
         trip.Simulation = false;
+        DelayAlertStates.TryRemove(trip.Id, out _);
         await _db.SaveChangesAsync(ct);
         await InvalidateTripLifecycleCachesAsync(ct);
         await Notify(trip, "completed", "Trip completed",
@@ -1429,11 +1966,7 @@ public class TrackingService
     {
         var routeStops = await LoadRouteStops(trip.RouteId, ct);
         var path = await LoadPath(trip.RouteId, ct);
-        var ping = await _db.GpsPings.AsNoTracking()
-            .Where(p => p.TripId == trip.Id)
-            .OrderByDescending(p => p.RecordedAt)
-            .ThenByDescending(p => p.Id)
-            .FirstOrDefaultAsync(ct);
+        var ping = await GetLatestGpsPingForTripAsync(trip.Id, routeStops, ct);
         var live = await OperationsAreLive(ct);
         double? along = ping is null || path.Count == 0
             ? (trip.Status == "Running" ? (double)trip.OdometerKm : null)
@@ -1860,6 +2393,7 @@ public class TrackingService
             await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
+            await MaybeNotifyDelayAsync(trip, snap, ct);
             return snap;
         }
         finally
@@ -1922,6 +2456,7 @@ public class TrackingService
             await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
+            await MaybeNotifyDelayAsync(trip, snap, ct);
             return snap;
         }
         finally
@@ -1941,11 +2476,7 @@ public class TrackingService
             var path = await LoadPath(trip.RouteId, ct);
             var etas = await EnsureStopEtas(trip, routeStops, ct);
 
-            var ping = await _db.GpsPings.AsNoTracking()
-                .Where(p => p.TripId == trip.Id)
-                .OrderByDescending(p => p.RecordedAt)
-                .ThenByDescending(p => p.Id)
-                .FirstOrDefaultAsync(ct);
+            var ping = await GetLatestGpsPingForTripAsync(trip.Id, routeStops, ct);
 
             double? along = ping is null || path.Count == 0
                 ? (double)trip.OdometerKm
@@ -1975,6 +2506,7 @@ public class TrackingService
             await _cache.InvalidateDomainAsync(CacheDomains.Live, ct);
             var snap = await BuildSnapshot(trip, null, null, ct);
             await Publish(snap, ct);
+            await MaybeNotifyDelayAsync(trip, snap, ct);
             return snap;
         }
         finally
@@ -2031,15 +2563,18 @@ public class TrackingService
         return match?.Amount;
     }
 
-    private async Task Publish(TrackSnapshotDto snap, CancellationToken ct)
+    private Task Publish(TrackSnapshotDto snap, CancellationToken ct) =>
+        BroadcastToTripGroupsAsync(snap, "location", snap, ct);
+
+    private async Task BroadcastToTripGroupsAsync(TrackSnapshotDto snap, string method, object payload, CancellationToken ct)
     {
         var sends = new List<Task>
         {
-            _hub.Clients.Group("bus-" + snap.FleetNumber).SendAsync("location", snap, ct),
-            _hub.Clients.Group("live").SendAsync("location", snap, ct)
+            _hub.Clients.Group("bus-" + snap.FleetNumber).SendAsync(method, payload, ct),
+            _hub.Clients.Group("live").SendAsync(method, payload, ct)
         };
         if (snap.TripId is int id)
-            sends.Add(_hub.Clients.Group("trip-" + id).SendAsync("location", snap, ct));
+            sends.Add(_hub.Clients.Group("trip-" + id).SendAsync(method, payload, ct));
         await Task.WhenAll(sends);
     }
 
@@ -2227,4 +2762,65 @@ public class TrackingService
 
     public Task InvalidateUserProfileCacheAsync(Guid userId, CancellationToken ct = default) =>
         _cache.RemoveDirectAsync(TransitCacheService.UserProfileKey(userId), ct);
+
+    public async Task DeleteTripGpsPingsAsync(Trip trip, CancellationToken ct = default)
+    {
+        DelayAlertStates.TryRemove(trip.Id, out _);
+        var routeStops = await LoadRouteStops(trip.RouteId, ct);
+        var latHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Latitude : null;
+        var lngHint = routeStops.Count > 0 ? (double?)routeStops[0].Stop.Longitude : null;
+        await _shards.DeleteTripGpsPingsAsync(trip.Id, latHint, lngHint, ct);
+
+        var pings = await _db.GpsPings.Where(p => p.TripId == trip.Id).ToListAsync(ct);
+        if (pings.Count > 0)
+            _db.GpsPings.RemoveRange(pings);
+    }
+
+    public async Task<List<AuditLog>> QueryAuditLogsAsync(
+        int limit,
+        string? actionFilter = null,
+        string? entityFilter = null,
+        CancellationToken ct = default)
+    {
+        var take = Math.Clamp(limit, 1, 2000);
+        IQueryable<AuditLog> primaryQuery = _db.AuditLogs.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(actionFilter))
+            primaryQuery = primaryQuery.Where(a => a.Action == actionFilter);
+        if (!string.IsNullOrWhiteSpace(entityFilter))
+            primaryQuery = primaryQuery.Where(a => a.Entity == entityFilter && a.EntityId != null);
+
+        var primaryRows = await primaryQuery
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(take)
+            .ToListAsync(ct);
+
+        if (!_shards.IsEnabled)
+            return primaryRows;
+
+        var shardRows = await _shards.QueryAuditLogsAsync(take, actionFilter, entityFilter, ct);
+        if (shardRows.Count == 0)
+            return primaryRows;
+
+        return primaryRows
+            .Concat(shardRows)
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(take)
+            .ToList();
+    }
+
+    public async Task<TripArchiveResultDto> ArchiveHistoricalTripsAsync(int? retentionDays = null, CancellationToken ct = default)
+    {
+        var days = Math.Clamp(retentionDays ?? _shards.Router.Options.RetentionDays, 0, 3650);
+        var cutoff = IndiaClock.Today().AddDays(-days);
+        var result = await _shards.ArchiveCompletedTripsAsync(_db, cutoff, ct);
+        if (result.ArchivedTrips > 0)
+            await InvalidateTripLifecycleCachesAsync(ct);
+        return result;
+    }
+
+    public Task<ShardingHealthReportDto> GetShardingHealthAsync(CancellationToken ct = default) =>
+        _shards.GetHealthReportAsync(ct);
+
+    public ShardRoutePreviewDto PreviewShardRoute(int tripId, double? lat, double? lng, string? regionHint = null) =>
+        _shards.Router.PreviewRoute(tripId, lat, lng, regionHint);
 }

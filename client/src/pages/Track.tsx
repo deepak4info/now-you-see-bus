@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { LiveJourneyPanel } from "@/components/LiveJourneyPanel";
 import { MapView, type BusPin } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StopTimeline } from "@/components/StopTimeline";
@@ -15,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useQuery } from "@/lib/api";
 import { ago, formatClock, formatEta, getIndiaDate, isDateOnly, rupee } from "@/lib/format";
 import { useBusLive } from "@/lib/live";
-import type { SearchResponse, TrackSnapshot } from "@/lib/types";
+import type { DelayAlertEvent, SearchResponse, TrackSnapshot } from "@/lib/types";
 
 export function TrackPage() {
   const { fleet = "" } = useParams();
@@ -48,11 +49,13 @@ export function TrackPage() {
   );
   const query = hasJourney && (searchSnapshot != null || !trackQuery.data) ? searchQuery : trackQuery;
   const seed = searchSnapshot ?? trackQuery.data;
+  const [delayAlert, setDelayAlert] = useState<DelayAlertEvent | null>(null);
   const live = useBusLive(
     fleet,
     seed,
     requestedRouteId ?? seed?.routeId,
     !tripId && date === getIndiaDate() && seed?.status !== "Completed" && seed?.status !== "Cancelled",
+    (alert) => setDelayAlert(alert),
   );
 
   // Network connectivity & offline cached route recovery
@@ -139,6 +142,11 @@ export function TrackPage() {
         longitude: effectiveLive.longitude,
         heading: effectiveLive.heading,
         label: effectiveLive.fleetNumber,
+        fleetNumber: effectiveLive.fleetNumber,
+        routeCode: effectiveLive.routeCode,
+        routeName: effectiveLive.routeName,
+        speedKmph: effectiveLive.speedKmph,
+        status: effectiveLive.status,
         variant: "live",
         recordedAt: effectiveLive.recordedAt,
       };
@@ -150,6 +158,11 @@ export function TrackPage() {
         longitude: effectiveLive.longitude,
         heading: effectiveLive.heading,
         label: effectiveLive.fleetNumber,
+        fleetNumber: effectiveLive.fleetNumber,
+        routeCode: effectiveLive.routeCode,
+        routeName: effectiveLive.routeName,
+        speedKmph: effectiveLive.speedKmph,
+        status: effectiveLive.status,
         variant: "last-known",
         recordedAt: effectiveLive.recordedAt,
       };
@@ -266,6 +279,14 @@ export function TrackPage() {
             <StopTimeline stops={effectiveLive.stops} />
           </div>
 
+          <LiveJourneyPanel
+            snapshot={effectiveLive}
+            from={from}
+            to={to}
+            date={date}
+            delayAlert={delayAlert}
+          />
+
           <Button className="w-full" variant="outline" asChild>
             <Link to={`/bus/${effectiveLive.fleetNumber}?${new URLSearchParams({ from, to, routeId: String(effectiveLive.routeId), date }).toString()}`}>
               Trip details
@@ -291,7 +312,10 @@ export function TrackPage() {
             {trackingStatus === "live" ? (
               <>
                 <span className="pulse" />
-                <span>GPS location · updated {ago(effectiveLive.recordedAt)}</span>
+                <span>
+                  GPS location · updated {ago(effectiveLive.recordedAt)}
+                  {effectiveLive.speedKmph != null ? ` · ${Math.round(effectiveLive.speedKmph)} km/h` : ""}
+                </span>
               </>
             ) : trackingStatus === "signal-lost" ? (
               <>

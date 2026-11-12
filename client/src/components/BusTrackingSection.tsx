@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, BusFront, CalendarClock, Clock, History, MapPin, Navigation, RefreshCw, Route as RouteIcon } from "lucide-react";
+import { ArrowRight, BusFront, CalendarClock, Clock, History, MapPin, Navigation, RefreshCw, Route as RouteIcon, Share2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { shareLiveJourney, trackingItemToShareTarget } from "@/components/LiveJourneyPanel";
 import {
   BusTrackingFilters,
   DEFAULT_TRACKING_FILTERS,
@@ -821,12 +822,26 @@ function LiveBusCard({ item }: { item: BusTrackingItem }) {
       </dl>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
-        <span className="text-xs text-muted-foreground">GPS update: {ago(item.recordedAt)}</span>
-        <Button size="sm" asChild>
-          <Link to={trackUrl}>
-            View Live Location <ArrowRight className="ml-1 h-4 w-4" aria-hidden="true" />
-          </Link>
-        </Button>
+        <span className="text-xs text-muted-foreground">
+          {item.speedKmph != null ? `${Math.round(item.speedKmph)} km/h · ` : ""}
+          GPS update: {ago(item.recordedAt)}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void shareLiveJourney(trackingItemToShareTarget(item))}
+            title="Share live journey with family"
+            className="h-8 px-2.5 text-xs"
+          >
+            <Share2 className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Share
+          </Button>
+          <Button size="sm" asChild className="h-8 text-xs">
+            <Link to={trackUrl}>
+              View Live Location <ArrowRight className="ml-1 h-4 w-4" aria-hidden="true" />
+            </Link>
+          </Button>
+        </div>
       </div>
     </article>
   );
@@ -999,6 +1014,7 @@ function snapshotToTrackingItem(s: TrackSnapshot): BusTrackingItem {
     status: s.status,
     delayMinutes: s.delayMinutes,
     delayStatus: s.delayStatus ?? null,
+    speedKmph: s.speedKmph ?? null,
     recordedAt: s.recordedAt,
     latitude: s.latitude,
     longitude: s.longitude,

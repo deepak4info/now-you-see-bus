@@ -24,6 +24,8 @@ public class AppDbContext : DbContext
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Visitor> Visitors => Set<Visitor>();
+    public DbSet<StopReminder> StopReminders => Set<StopReminder>();
+    public DbSet<BusInfoReport> BusInfoReports => Set<BusInfoReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -91,5 +93,28 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<AuditLog>().ToTable("AuditLogs");
         modelBuilder.Entity<Visitor>().ToTable("Visitors");
         modelBuilder.Entity<Visitor>().HasKey(v => v.Id);
+        modelBuilder.Entity<StopReminder>().ToTable("StopReminders");
+        modelBuilder.Entity<StopReminder>()
+            .HasOne(r => r.Route)
+            .WithMany()
+            .HasForeignKey(r => r.RouteId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<StopReminder>()
+            .HasOne(r => r.Stop)
+            .WithMany()
+            .HasForeignKey(r => r.StopId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<StopReminder>().HasIndex(r => new { r.UserId, r.IsTriggered, r.TargetDate });
+        modelBuilder.Entity<StopReminder>().HasIndex(r => new { r.RouteId, r.TargetDate, r.IsTriggered });
+        modelBuilder.Entity<BusInfoReport>().ToTable("BusInfoReports");
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.FleetNumber).HasMaxLength(20);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.Category).HasMaxLength(40);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.ReportedStopName).HasMaxLength(120);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.ProposedTime).HasMaxLength(40);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.Description).HasMaxLength(500);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.Status).HasMaxLength(20);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.AdminNotes).HasMaxLength(500);
+        modelBuilder.Entity<BusInfoReport>().Property(r => r.VerifiedBy).HasMaxLength(100);
+        modelBuilder.Entity<BusInfoReport>().HasIndex(r => new { r.Status, r.CreatedAt });
     }
 }

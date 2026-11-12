@@ -42,9 +42,11 @@ public static class DbInitializer
             }
         }
 
+        await EnsurePassengerConvenienceSchemaAsync(db);
         await SeedAccountsAsync(db, passwords);
         await SeedDelhiCorridorAsync(db, geometry, logger);
         await SeedFatehabadDelhiCorridorAsync(db, geometry, logger);
+        await SeedBhunaCorridorAsync(db, geometry, logger);
         await SeedOperationsAsync(db);
         await DeduplicateStopsAsync(db, logger);
 
@@ -61,6 +63,71 @@ public static class DbInitializer
         }
 
         logger.LogInformation("WhereIsMyBus database is ready");
+    }
+
+    private static async Task EnsurePassengerConvenienceSchemaAsync(AppDbContext db)
+    {
+        if (!db.Database.IsSqlServer()) return;
+        const string sql = """
+            IF OBJECT_ID(N'dbo.StopReminders', N'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.StopReminders (
+                    Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_StopReminders PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NOT NULL,
+                    TripId INT NULL,
+                    RouteId INT NOT NULL,
+                    StopId INT NOT NULL,
+                    StopName NVARCHAR(120) NOT NULL,
+                    FleetNumber NVARCHAR(20) NOT NULL,
+                    RemindBeforeMinutes INT NOT NULL CONSTRAINT DF_StopReminders_Lead DEFAULT 10,
+                    TargetDate DATE NOT NULL,
+                    IsTriggered BIT NOT NULL CONSTRAINT DF_StopReminders_Triggered DEFAULT 0,
+                    TriggeredAt DATETIME2 NULL,
+                    CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_StopReminders_Created DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT FK_StopReminders_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id),
+                    CONSTRAINT FK_StopReminders_Routes FOREIGN KEY (RouteId) REFERENCES dbo.Routes(Id),
+                    CONSTRAINT FK_StopReminders_Stops FOREIGN KEY (StopId) REFERENCES dbo.Stops(Id)
+                );
+                CREATE INDEX IX_StopReminders_Route_Active ON dbo.StopReminders(RouteId, TargetDate, IsTriggered);
+                CREATE INDEX IX_StopReminders_User ON dbo.StopReminders(UserId, CreatedAt DESC);
+            END;
+            IF OBJECT_ID(N'dbo.BusInfoReports', N'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.BusInfoReports (
+                    Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_BusInfoReports PRIMARY KEY,
+                    UserId UNIQUEIDENTIFIER NULL,
+                    TripId INT NULL,
+                    RouteId INT NULL,
+                    BusId INT NULL,
+                    FleetNumber NVARCHAR(20) NOT NULL,
+                    Category NVARCHAR(40) NOT NULL,
+                    ReportedStopName NVARCHAR(120) NULL,
+                    ProposedTime NVARCHAR(40) NULL,
+                    DelayMinutes INT NULL,
+                    Description NVARCHAR(500) NOT NULL,
+                    Status NVARCHAR(20) NOT NULL CONSTRAINT DF_BusInfoReports_Status DEFAULT N'Open',
+                    AdminNotes NVARCHAR(500) NULL,
+                    VerifiedAt DATETIME2 NULL,
+                    VerifiedBy NVARCHAR(100) NULL,
+                    CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_BusInfoReports_Created DEFAULT SYSUTCDATETIME()
+                );
+                CREATE INDEX IX_BusInfoReports_Status_Created ON dbo.BusInfoReports(Status, CreatedAt DESC);
+            END
+            ELSE
+            BEGIN
+                IF COL_LENGTH(N'dbo.BusInfoReports', N'ProposedTime') IS NULL
+                    ALTER TABLE dbo.BusInfoReports ADD ProposedTime NVARCHAR(40) NULL;
+                IF COL_LENGTH(N'dbo.BusInfoReports', N'DelayMinutes') IS NULL
+                    ALTER TABLE dbo.BusInfoReports ADD DelayMinutes INT NULL;
+                IF COL_LENGTH(N'dbo.BusInfoReports', N'AdminNotes') IS NULL
+                    ALTER TABLE dbo.BusInfoReports ADD AdminNotes NVARCHAR(500) NULL;
+                IF COL_LENGTH(N'dbo.BusInfoReports', N'VerifiedAt') IS NULL
+                    ALTER TABLE dbo.BusInfoReports ADD VerifiedAt DATETIME2 NULL;
+                IF COL_LENGTH(N'dbo.BusInfoReports', N'VerifiedBy') IS NULL
+                    ALTER TABLE dbo.BusInfoReports ADD VerifiedBy NVARCHAR(100) NULL;
+            END;
+            """;
+        await db.Database.ExecuteSqlRawAsync(sql);
     }
 
     private static async Task EnsureDatabaseAsync(string connectionString, ILogger logger)
@@ -551,6 +618,136 @@ public static class DbInitializer
         }
 
         return mergedCount;
+    }
+
+    private static async Task SeedBhunaCorridorAsync(AppDbContext db, RouteGeometryService geometry, ILogger logger)
+    {
+        var op = await db.Operators.FirstOrDefaultAsync(o => o.Code == "HR")
+                 ?? await db.Operators.FirstOrDefaultAsync();
+        if (op is null) return;
+
+        async Task<Stop> EnsureStop(string code, string name, decimal lat, decimal lng, string city, string address)
+        {
+            var existing = await db.Stops.FirstOrDefaultAsync(s => s.Code == code || s.Name == name);
+            if (existing is not null) return existing;
+            var stop = new Stop
+            {
+                Code = code,
+                Name = name,
+                Latitude = lat,
+                Longitude = lng,
+                City = city,
+                Address = address,
+                IsActive = true
+            };
+            db.Stops.Add(stop);
+            await db.SaveChangesAsync();
+            return stop;
+        }
+
+        var bhuna = await db.Stops.FirstOrDefaultAsync(s => s.Code == "BH-01" || s.Code == "BHN" || s.Name == "Bhuna")
+            ?? await EnsureStop("BHN", "Bhuna", 29.531200m, 75.708300m, "Fatehabad", "Bhuna Bus Stand, Main Road");
+        var uklana = await db.Stops.FirstOrDefaultAsync(s => s.Code == "UKL" || s.Name == "Uklana")
+            ?? await EnsureStop("UKL", "Uklana", 29.510000m, 75.860000m, "Hisar", "Uklana Mandi Bus Stand");
+        var barwala = await db.Stops.FirstOrDefaultAsync(s => s.Code == "BWL" || s.Name.StartsWith("Barwala"))
+            ?? await EnsureStop("BWL", "Barwala", 29.364500m, 75.908100m, "Barwala", "Barwala Bus Stand");
+        var hisar = await db.Stops.FirstOrDefaultAsync(s => s.Code == "HISAR" || s.Code == "HIS" || s.Name.StartsWith("Hisar"))
+            ?? await EnsureStop("HIS", "Hisar", 29.149200m, 75.721700m, "Hisar", "Hisar Bus Stand");
+
+        var route103 = await db.Routes.FirstOrDefaultAsync(r => r.Code == "103");
+        if (route103 is null)
+        {
+            route103 = new Route
+            {
+                Code = "103",
+                Name = "Bhuna - Uklana - Barwala - Hisar",
+                OperatorId = op.Id,
+                DistanceMode = "Auto",
+                DistanceKm = 48.00m,
+                IsActive = true
+            };
+            db.Routes.Add(route103);
+            await db.SaveChangesAsync();
+        }
+
+        if (!await db.RouteStops.AnyAsync(rs => rs.RouteId == route103.Id))
+        {
+            db.RouteStops.AddRange(
+                new RouteStop { RouteId = route103.Id, StopId = bhuna.Id, SequenceNo = 1, DistanceFromOriginKm = 0.00m },
+                new RouteStop { RouteId = route103.Id, StopId = uklana.Id, SequenceNo = 2, DistanceFromOriginKm = 18.00m },
+                new RouteStop { RouteId = route103.Id, StopId = barwala.Id, SequenceNo = 3, DistanceFromOriginKm = 31.00m },
+                new RouteStop { RouteId = route103.Id, StopId = hisar.Id, SequenceNo = 4, DistanceFromOriginKm = 48.00m }
+            );
+            await db.SaveChangesAsync();
+        }
+
+        var bus118 = await db.Buses.FirstOrDefaultAsync(b => b.FleetNumber == "118")
+                     ?? await db.Buses.FirstOrDefaultAsync(b => b.IsActive);
+        var driver = await db.Drivers.FirstOrDefaultAsync(d => d.IsActive);
+
+        if (!await db.Schedules.AnyAsync(s => s.RouteId == route103.Id))
+        {
+            var timings = new[]
+            {
+                new TimeOnly(6, 30),
+                new TimeOnly(10, 15),
+                new TimeOnly(14, 0)
+            };
+            foreach (var dep in timings)
+            {
+                db.Schedules.Add(new Schedule
+                {
+                    RouteId = route103.Id,
+                    BusId = bus118?.Id,
+                    DriverId = driver?.Id,
+                    DepartureTime = dep,
+                    ServiceDays = "1111111",
+                    IsActive = true
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        if (!await db.FareSlabs.AnyAsync(f => f.RouteId == route103.Id))
+        {
+            var stopsList = new (int FromId, int ToId, decimal Amt)[]
+            {
+                (bhuna.Id, uklana.Id, 25m), (bhuna.Id, barwala.Id, 40m), (bhuna.Id, hisar.Id, 60m),
+                (uklana.Id, barwala.Id, 20m), (uklana.Id, hisar.Id, 40m),
+                (barwala.Id, hisar.Id, 35m)
+            };
+            foreach (var (fId, tId, amt) in stopsList)
+            {
+                db.FareSlabs.Add(new FareSlab
+                {
+                    RouteId = route103.Id,
+                    FromStopId = fId,
+                    ToStopId = tId,
+                    Amount = amt,
+                    Currency = "INR"
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var ptCount = await db.RoutePoints.CountAsync(p => p.RouteId == route103.Id);
+        if (ptCount < 30)
+        {
+            logger.LogInformation("Building road geometry for Route 103 (Bhuna - Hisar)...");
+            await geometry.RebuildAsync(route103.Id);
+        }
+
+        // Also ensure existing Bhuna-Fatehabad Route (B-F-001) has active schedules
+        var routeBf = await db.Routes.FirstOrDefaultAsync(r => r.Code == "B-F-001");
+        if (routeBf is not null && !await db.Schedules.AnyAsync(s => s.RouteId == routeBf.Id))
+        {
+            db.Schedules.AddRange(
+                new Schedule { RouteId = routeBf.Id, BusId = bus118?.Id, DriverId = driver?.Id, DepartureTime = new TimeOnly(7, 0), ServiceDays = "1111111", IsActive = true },
+                new Schedule { RouteId = routeBf.Id, BusId = bus118?.Id, DriverId = driver?.Id, DepartureTime = new TimeOnly(11, 0), ServiceDays = "1111111", IsActive = true },
+                new Schedule { RouteId = routeBf.Id, BusId = bus118?.Id, DriverId = driver?.Id, DepartureTime = new TimeOnly(15, 30), ServiceDays = "1111111", IsActive = true }
+            );
+            await db.SaveChangesAsync();
+        }
     }
 
     private static string FindDatabaseDir()

@@ -495,11 +495,8 @@ public class BulkUploadController : ControllerBase
     [HttpGet("history")]
     public async Task<IActionResult> GetImportHistory(CancellationToken ct)
     {
-        var logs = await _db.AuditLogs.AsNoTracking()
-            .Where(a => a.Action == "BulkImport")
-            .OrderByDescending(a => a.CreatedAt)
-            .Take(25)
-            .Select(a => new
+        var auditLogs = await _tracking.QueryAuditLogsAsync(25, actionFilter: "BulkImport", entityFilter: null, ct);
+        var logs = auditLogs.Select(a => new
             {
                 importId = a.EntityId ?? a.Id.ToString(),
                 date = a.CreatedAt,
@@ -507,7 +504,7 @@ public class BulkUploadController : ControllerBase
                 details = a.Detail ?? "Bulk Import",
                 status = "Completed"
             })
-            .ToListAsync(ct);
+            .ToList();
 
         var activeSessions = _sessions.Values
             .OrderByDescending(s => s.CreatedAt)

@@ -149,8 +149,7 @@ public class DriverController : ControllerBase
         var trip = await OwnTrip(id, ct);
         if (trip is null) return NotFound(new { message = "That trip is not assigned to you." });
         if (trip.Status == "Running") return BadRequest(new { message = "End the trip before running it again." });
-        var pings = await _db.GpsPings.Where(p => p.TripId == id).ToListAsync(ct);
-        _db.GpsPings.RemoveRange(pings);
+        await _tracking.DeleteTripGpsPingsAsync(trip, ct);
         var etas = await _db.TripStopEtas.Where(e => e.TripId == id).ToListAsync(ct);
         _db.TripStopEtas.RemoveRange(etas);
         trip.Status = "Scheduled";

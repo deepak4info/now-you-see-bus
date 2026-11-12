@@ -195,7 +195,52 @@ public record RouteSearchResultDto(
     DateOnly EffectiveDate,
     DateOnly RequestedDate,
     bool ShowingNextDate,
-    List<TrackSnapshotDto> Results
+    List<TrackSnapshotDto> Results,
+    MultiRoutePlanDto? JourneyPlan = null
+);
+
+public record JourneyLegDto(
+    int RouteId,
+    string RouteCode,
+    string RouteName,
+    int? ScheduleId,
+    int? TripId,
+    string? FleetNumber,
+    string? BusType,
+    string? OperatorName,
+    string FromStop,
+    string ToStop,
+    string DepartureTime,
+    string ArrivalTime,
+    int DurationMinutes,
+    decimal EstimatedFare,
+    double DistanceKm,
+    string Status
+);
+
+public record JourneyOptionDto(
+    string OptionId,
+    bool IsDirect,
+    int TransfersCount,
+    List<string> TransferStops,
+    string DepartureTime,
+    string ArrivalTime,
+    int TotalJourneyMinutes,
+    int TotalWaitMinutes,
+    decimal EstimatedTotalFare,
+    double TotalDistanceKm,
+    List<JourneyLegDto> Legs,
+    string Summary
+);
+
+public record MultiRoutePlanDto(
+    string From,
+    string To,
+    DateOnly Date,
+    bool DirectAvailable,
+    List<JourneyOptionDto> DirectOptions,
+    List<JourneyOptionDto> TransferOptions,
+    List<JourneyOptionDto> AllOptions
 );
 
 public record BusTrackingItemDto(
@@ -226,7 +271,8 @@ public record BusTrackingItemDto(
     DateTime? RecordedAt,
     double? Latitude,
     double? Longitude,
-    bool OperationsLive
+    bool OperationsLive,
+    double? SpeedKmph = null
 );
 
 public record PaginatedBusTrackingDto(
@@ -322,5 +368,32 @@ public record CachedUserProfileDto(
     string? DriverCode,
     string? Phone,
     bool IsActive
+);
+
+public record StopReminderRequest(
+    int RouteId,
+    int StopId,
+    int? TripId = null,
+    string? FleetNumber = null,
+    int RemindBeforeMinutes = 10,
+    DateOnly? TargetDate = null
+);
+
+public record BusInfoReportRequest(
+    string FleetNumber,
+    int? TripId = null,
+    int? RouteId = null,
+    int? BusId = null,
+    string Category = "Other",
+    string? ReportedStopName = null,
+    string? ProposedTime = null,
+    int? DelayMinutes = null,
+    string Description = ""
+);
+
+public record UpdateBusReportStatusRequest(
+    string Status,
+    string? AdminNotes = null,
+    bool PublishAlert = false
 );
 

@@ -9,7 +9,8 @@ import { SearchPage } from "@/pages/Search";
 import { BusPage } from "@/pages/Bus";
 import { TrackPage } from "@/pages/Track";
 import { LoginPage } from "@/pages/Login";
-
+import { RegisterPage } from "@/pages/Register";
+import { FavoritesPage } from "@/pages/Favorites";
 import { NotificationsPage } from "@/pages/Notifications";
 import { DriverPage } from "@/pages/Driver";
 import { AdminShell } from "@/pages/admin/AdminShell";
@@ -52,6 +53,8 @@ export default function App() {
         <Route path="bus/:fleet" element={<BusPage />} />
         <Route path="track/:fleet" element={<TrackPage />} />
         <Route path="login" element={<LoginPage />} />
+        <Route path="register" element={<RegisterPage />} />
+        <Route path="favorites" element={<Guard><FavoritesPage /></Guard>} />
         <Route path="notifications" element={<Guard><NotificationsPage /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

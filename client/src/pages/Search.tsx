@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowRight, BusFront, CalendarDays, MapPin, Share2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, BusFront, CalendarDays, MapPin, Share2, Star } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
+import { JourneyPlannerCard } from "@/components/JourneyPlannerCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { useQuery } from "@/lib/api";
+import { api, useQuery } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { formatClock, formatDateWithWeekday, formatEta, formatWhen, getIndiaDate, isDateOnly, rupee } from "@/lib/format";
 import { saveRecentSearch } from "@/lib/recentSearch";
-import type { SearchResponse, StopOnTrip, TrackSnapshot } from "@/lib/types";
+import type { SearchResponse, StopOnTrip, StopOption, TrackSnapshot } from "@/lib/types";
 
 export function SearchPage() {
+  const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const from = params.get("from") ?? "";
   const to = params.get("to") ?? "";
   const dateParam = params.get("date");
   const date = isDateOnly(dateParam) ? dateParam : getIndiaDate();
   const [shareMessage, setShareMessage] = useState("");
+  const [savingFav, setSavingFav] = useState(false);
+  const stopsQuery = useQuery<StopOption[]>("/api/stops");
   const query = useQuery<SearchResponse>(
     from && to ? `/api/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${date}` : null,
   );
@@ -72,10 +77,46 @@ export function SearchPage() {
               </h1>
               <p className="mt-2 text-sm text-muted-foreground">Upcoming bus times, live status, and fares for your trip.</p>
             </div>
-            <Button type="button" variant="outline" className="self-start shrink-0" onClick={() => void shareSearch()}>
-              <Share2 size={16} aria-hidden="true" />
-              Share search
-            </Button>
+            <div className="flex flex-wrap gap-2 self-start shrink-0">
+              {user && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={savingFav}
+                  onClick={async () => {
+                    const fromStopObj = stopsQuery.data?.find((s) => s.name.toLowerCase() === resolvedFrom.toLowerCase());
+                    const toStopObj = stopsQuery.data?.find((s) => s.name.toLowerCase() === resolvedTo.toLowerCase());
+                    if (!fromStopObj) {
+                      setShareMessage("Open Favourites page to save this corridor.");
+                      return;
+                    }
+                    setSavingFav(true);
+                    try {
+                      await api("/api/favorites", {
+                        method: "POST",
+                        body: JSON.stringify({
+                          fromStopId: fromStopObj.id,
+                          toStopId: toStopObj?.id ?? null,
+                          label: `${resolvedFrom} → ${resolvedTo}`,
+                        }),
+                      });
+                      setShareMessage("Route saved to your Favourites.");
+                    } catch (e) {
+                      setShareMessage(e instanceof Error ? e.message : "Could not save route.");
+                    } finally {
+                      setSavingFav(false);
+                    }
+                  }}
+                >
+                  <Star size={16} aria-hidden="true" />
+                  Save route
+                </Button>
+              )}
+              <Button type="button" variant="outline" onClick={() => void shareSearch()}>
+                <Share2 size={16} aria-hidden="true" />
+                Share search
+              </Button>
+            </div>
           </div>
           <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-center sm:gap-3">
             <div className="flex min-w-0 items-start gap-3 rounded-xl border bg-card/85 p-3">
@@ -139,7 +180,12 @@ export function SearchPage() {
           </div>
         </div>
       )}
-      {query.data && query.data.results.length === 0 && (
+      {query.data?.journeyPlan && query.data.journeyPlan.allOptions.length > 0 && (
+        <div className="mt-6">
+          <JourneyPlannerCard plan={query.data.journeyPlan} date={query.data.date} />
+        </div>
+      )}
+      {query.data && query.data.results.length === 0 && (!query.data.journeyPlan || query.data.journeyPlan.allOptions.length === 0) && (
         <div className="mt-8 rounded-2xl border bg-card p-6 sm:p-8">
           <div className="mx-auto max-w-lg text-center">
             <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-muted text-muted-foreground"><BusFront size={22} aria-hidden="true" /></span>

@@ -85,6 +85,50 @@ export type TrackSnapshot = {
   path: { latitude: number; longitude: number }[];
 };
 
+export type JourneyLeg = {
+  routeId: number;
+  routeCode: string;
+  routeName: string;
+  scheduleId: number | null;
+  tripId: number | null;
+  fleetNumber: string | null;
+  busType: string | null;
+  operatorName: string | null;
+  fromStop: string;
+  toStop: string;
+  departureTime: string;
+  arrivalTime: string;
+  durationMinutes: number;
+  estimatedFare: number;
+  distanceKm: number;
+  status: string;
+};
+
+export type JourneyOption = {
+  optionId: string;
+  isDirect: boolean;
+  transfersCount: number;
+  transferStops: string[];
+  departureTime: string;
+  arrivalTime: string;
+  totalJourneyMinutes: number;
+  totalWaitMinutes: number;
+  estimatedTotalFare: number;
+  totalDistanceKm: number;
+  legs: JourneyLeg[];
+  summary: string;
+};
+
+export type MultiRoutePlan = {
+  from: string;
+  to: string;
+  date: string;
+  directAvailable: boolean;
+  directOptions: JourneyOption[];
+  transferOptions: JourneyOption[];
+  allOptions: JourneyOption[];
+};
+
 export type SearchResponse = {
   from: string;
   to: string;
@@ -92,6 +136,7 @@ export type SearchResponse = {
   requestedDate?: string;
   showingNextDate?: boolean;
   results: TrackSnapshot[];
+  journeyPlan?: MultiRoutePlan | null;
 };
 
 export type BusTrackingItem = {
@@ -123,6 +168,20 @@ export type BusTrackingItem = {
   latitude: number | null;
   longitude: number | null;
   operationsLive: boolean;
+  speedKmph?: number | null;
+};
+
+export type DelayAlertEvent = {
+  tripId: number;
+  fleetNumber: string;
+  routeCode: string;
+  routeName: string;
+  delayMinutes: number;
+  nextStop?: string | null;
+  estimatedArrivalTime?: string | null;
+  recordedAt?: string | null;
+  title: string;
+  message: string;
 };
 
 export type PaginatedBusTracking = {
@@ -155,16 +214,34 @@ export type TrackingFilterOptions = {
 
 export type Favorite = {
   id: number;
+  kind?: "bus" | "route" | "stop";
   busId: number | null;
   fleetNumber: string | null;
   registrationNumber: string | null;
   routeId: number | null;
   routeCode: string | null;
+  routeName?: string | null;
   fromStop: string | null;
+  fromStopCode?: string | null;
   toStop: string | null;
+  toStopCode?: string | null;
   fromStopId: number | null;
   toStopId: number | null;
   label: string | null;
+  createdAt: string;
+};
+
+export type StopReminderItem = {
+  id: number;
+  tripId: number | null;
+  routeId: number;
+  stopId: number;
+  stopName: string;
+  fleetNumber: string;
+  remindBeforeMinutes: number;
+  targetDate: string;
+  isTriggered: boolean;
+  triggeredAt: string | null;
   createdAt: string;
 };
 
@@ -200,4 +277,23 @@ export type PublicRoute = {
   liveCount: number;
   hasLiveBus: boolean;
   runningBuses: TrackSnapshot[];
+};
+
+export type CommunityUpdateItem = {
+  id: number;
+  category: string;
+  fleetNumber: string;
+  routeId: number | null;
+  routeCode: string | null;
+  routeName: string | null;
+  tripId: number | null;
+  reportedStopName: string | null;
+  proposedTime: string | null;
+  delayMinutes: number | null;
+  description: string;
+  status: string;
+  adminNotes: string | null;
+  verifiedAt: string | null;
+  verifiedBy: string | null;
+  createdAt: string;
 };

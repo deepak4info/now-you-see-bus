@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { resolveUrl } from "@/lib/api";
-import type { TrackSnapshot } from "@/lib/types";
+import type { DelayAlertEvent, TrackSnapshot } from "@/lib/types";
 
 function mergeLeg(previous: TrackSnapshot | null, next: TrackSnapshot): TrackSnapshot {
   if (!previous?.fromStop && !previous?.toStop) return next;
@@ -23,8 +23,11 @@ export function useBusLive(
   seed: TrackSnapshot | null,
   selectedRouteId?: number,
   subscribeToLive = true,
+  onDelayAlert?: (alert: DelayAlertEvent) => void,
 ) {
   const [snap, setSnap] = useState<TrackSnapshot | null>(seed);
+  const delayAlertRef = useRef(onDelayAlert);
+  delayAlertRef.current = onDelayAlert;
 
   useEffect(() => {
     setSnap(seed);
@@ -40,6 +43,11 @@ export function useBusLive(
         && (selectedRouteId == null || payload.routeId === selectedRouteId)
       ) {
         setSnap((current) => mergeLeg(current, payload));
+      }
+    });
+    conn.on("delayAlert", (alert: DelayAlertEvent) => {
+      if (alert.fleetNumber === fleet) {
+        delayAlertRef.current?.(alert);
       }
     });
     conn.onreconnected(() => {

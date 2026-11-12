@@ -69,6 +69,7 @@ public class PassengerController : ControllerBase
 
         var day = date ?? IndiaClock.Today();
         var search = await _tracking.SearchRouteAsync(origin.Name, dest.Name, day, ct: ct);
+        var plan = await _tracking.PlanJourneyAsync(origin.Name, dest.Name, day, ct: ct);
         return Ok(new
         {
             from = search.From,
@@ -76,8 +77,27 @@ public class PassengerController : ControllerBase
             date = search.EffectiveDate.ToString("yyyy-MM-dd"),
             requestedDate = search.RequestedDate.ToString("yyyy-MM-dd"),
             showingNextDate = search.ShowingNextDate,
-            results = search.Results
+            results = search.Results,
+            journeyPlan = plan
         });
+    }
+
+    [HttpGet("journey-planner")]
+    public async Task<IActionResult> JourneyPlanner([FromQuery] string from, [FromQuery] string to, [FromQuery] DateOnly? date, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+            return BadRequest(new { message = "Choose where you are leaving from and where you are going." });
+        if (from.Trim().Equals(to.Trim(), StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Pick two different stops." });
+
+        var origin = await _tracking.FindStop(from, ct);
+        var dest = await _tracking.FindStop(to, ct);
+        if (origin is null) return BadRequest(new { message = $"No stop matches \"{from.Trim()}\"." });
+        if (dest is null) return BadRequest(new { message = $"No stop matches \"{to.Trim()}\"." });
+
+        var day = date ?? IndiaClock.Today();
+        var plan = await _tracking.PlanJourneyAsync(origin.Name, dest.Name, day, ct: ct);
+        return Ok(plan);
     }
 
     [HttpGet("track/{fleet}")]
@@ -230,13 +250,17 @@ public class PassengerController : ControllerBase
         return Ok(rows.Select(f => new
         {
             f.Id,
+            kind = f.BusId != null ? "bus" : f.RouteId != null ? "route" : "stop",
             f.BusId,
             fleetNumber = f.Bus?.FleetNumber,
             registrationNumber = f.Bus?.RegistrationNumber,
             f.RouteId,
             routeCode = f.Route?.Code,
+            routeName = f.Route?.Name,
             fromStop = f.FromStop?.Name,
+            fromStopCode = f.FromStop?.Code,
             toStop = f.ToStop?.Name,
+            toStopCode = f.ToStop?.Code,
             f.FromStopId,
             f.ToStopId,
             f.Label,
@@ -248,8 +272,19 @@ public class PassengerController : ControllerBase
     [HttpPost("favorites")]
     public async Task<IActionResult> AddFavorite(FavoriteRequest request, CancellationToken ct)
     {
-        if (request.BusId is null && request.RouteId is null)
-            return BadRequest(new { message = "Choose a bus or a route to save." });
+        if (request.BusId is null && request.RouteId is null && request.FromStopId is null)
+            return BadRequest(new { message = "Choose a bus, route, or bus stop to save." });
+
+        var existing = await _db.Favorites.FirstOrDefaultAsync(
+            f => f.UserId == User.Id()
+                && f.BusId == request.BusId
+                && f.RouteId == request.RouteId
+                && f.FromStopId == request.FromStopId
+                && f.ToStopId == request.ToStopId,
+            ct);
+        if (existing is not null)
+            return Ok(new { existing.Id, duplicate = true });
+
         var row = new Favorite
         {
             UserId = User.Id(),
@@ -262,7 +297,7 @@ public class PassengerController : ControllerBase
         };
         _db.Favorites.Add(row);
         await _db.SaveChangesAsync(ct);
-        return Ok(new { row.Id });
+        return Ok(new { row.Id, duplicate = false });
     }
 
     [Authorize]
@@ -321,6 +356,214 @@ public class PassengerController : ControllerBase
         foreach (var row in rows) row.IsRead = true;
         await _db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    [Authorize]
+    [HttpGet("reminders")]
+    public async Task<IActionResult> Reminders(CancellationToken ct)
+    {
+        var rows = await _db.StopReminders.AsNoTracking()
+            .Where(r => r.UserId == User.Id())
+            .OrderBy(r => r.IsTriggered)
+            .ThenByDescending(r => r.CreatedAt)
+            .Take(50)
+            .ToListAsync(ct);
+        return Ok(rows.Select(r => new
+        {
+            r.Id,
+            r.TripId,
+            r.RouteId,
+            r.StopId,
+            r.StopName,
+            r.FleetNumber,
+            r.RemindBeforeMinutes,
+            targetDate = r.TargetDate.ToString("yyyy-MM-dd"),
+            r.IsTriggered,
+            triggeredAt = r.TriggeredAt is DateTime t ? IndiaClock.AsUtc(t) : (DateTime?)null,
+            createdAt = IndiaClock.AsUtc(r.CreatedAt)
+        }));
+    }
+
+    [Authorize]
+    [HttpPost("reminders")]
+    public async Task<IActionResult> CreateReminder(StopReminderRequest request, CancellationToken ct)
+    {
+        var stop = await _db.Stops.AsNoTracking().FirstOrDefaultAsync(s => s.Id == request.StopId && s.IsActive, ct);
+        if (stop is null)
+            return BadRequest(new { message = "Selected stop was not found." });
+
+        var routeExists = await _db.Routes.AsNoTracking().AnyAsync(r => r.Id == request.RouteId && r.IsActive, ct);
+        if (!routeExists)
+            return BadRequest(new { message = "Selected route was not found." });
+
+        var lead = Math.Clamp(request.RemindBeforeMinutes, 1, 60);
+        var targetDate = request.TargetDate ?? IndiaClock.Today();
+        var fleet = (request.FleetNumber ?? "").Trim();
+        if (fleet.Length > 20) fleet = fleet[..20];
+
+        var existing = await _db.StopReminders.FirstOrDefaultAsync(
+            r => r.UserId == User.Id()
+                && r.RouteId == request.RouteId
+                && r.StopId == request.StopId
+                && r.TripId == request.TripId
+                && r.TargetDate == targetDate
+                && !r.IsTriggered,
+            ct);
+
+        if (existing is not null)
+        {
+            existing.RemindBeforeMinutes = lead;
+            if (!string.IsNullOrWhiteSpace(fleet)) existing.FleetNumber = fleet;
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { existing.Id, stopName = existing.StopName, remindBeforeMinutes = existing.RemindBeforeMinutes, updated = true });
+        }
+
+        var row = new StopReminder
+        {
+            UserId = User.Id(),
+            TripId = request.TripId,
+            RouteId = request.RouteId,
+            StopId = request.StopId,
+            StopName = stop.Name,
+            FleetNumber = fleet,
+            RemindBeforeMinutes = lead,
+            TargetDate = targetDate,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.StopReminders.Add(row);
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { row.Id, stopName = row.StopName, remindBeforeMinutes = row.RemindBeforeMinutes, updated = false });
+    }
+
+    [Authorize]
+    [HttpDelete("reminders/{id:int}")]
+    public async Task<IActionResult> DeleteReminder(int id, CancellationToken ct)
+    {
+        var row = await _db.StopReminders.FirstOrDefaultAsync(r => r.Id == id && r.UserId == User.Id(), ct);
+        if (row is null) return NotFound(new { message = "Reminder not found." });
+        _db.StopReminders.Remove(row);
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [AllowAnonymous]
+    [HttpPost("reports")]
+    [HttpPost("community-updates")]
+    public async Task<IActionResult> SubmitBusInfoReport(BusInfoReportRequest request, CancellationToken ct)
+    {
+        var description = (request.Description ?? "").Trim();
+        if (description.Length < 5)
+            return BadRequest(new { message = "Please describe the update or issue (at least 5 characters)." });
+        if (description.Length > 500)
+            description = description[..500];
+
+        var fleet = string.IsNullOrWhiteSpace(request.FleetNumber) ? "General" : request.FleetNumber.Trim();
+        if (fleet.Length > 20) fleet = fleet[..20];
+
+        var allowedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "DelayReport", "CancelledService", "MissingRoute", "UpdatedTiming",
+            "WrongTiming", "WrongStop", "WrongRoute", "WrongBusNumber", "GpsIssue", "Other"
+        };
+        var rawCategory = request.Category?.Trim() ?? "";
+        var category = allowedCategories.TryGetValue(rawCategory, out var canonicalCategory)
+            ? canonicalCategory
+            : "Other";
+
+        var stopName = string.IsNullOrWhiteSpace(request.ReportedStopName) ? null : request.ReportedStopName.Trim();
+        if (stopName is { Length: > 120 }) stopName = stopName[..120];
+
+        var proposedTime = string.IsNullOrWhiteSpace(request.ProposedTime) ? null : request.ProposedTime.Trim();
+        if (proposedTime is { Length: > 40 }) proposedTime = proposedTime[..40];
+
+        int? delayMinutes = request.DelayMinutes is int d && d > 0 ? Math.Clamp(d, 1, 600) : null;
+
+        Guid? userId = User?.Identity?.IsAuthenticated == true ? User.Id() : null;
+
+        var report = new BusInfoReport
+        {
+            UserId = userId,
+            TripId = request.TripId,
+            RouteId = request.RouteId,
+            BusId = request.BusId,
+            FleetNumber = fleet,
+            Category = category,
+            ReportedStopName = stopName,
+            ProposedTime = proposedTime,
+            DelayMinutes = delayMinutes,
+            Description = description,
+            Status = "Pending",
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.BusInfoReports.Add(report);
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(userId, "ReportBusInfo", "BusInfoReport", report.Id.ToString(), $"Bus {fleet} ({category}): {description}", ct);
+        return Ok(new
+        {
+            report.Id,
+            report.Status,
+            message = "Submitted for admin verification. Once approved, it will appear on the public Community Updates board."
+        });
+    }
+
+    [AllowAnonymous]
+    [HttpGet("community-updates")]
+    public async Task<IActionResult> CommunityUpdates(
+        [FromQuery] string? category = null,
+        [FromQuery] int? routeId = null,
+        [FromQuery] string? fleetNumber = null,
+        CancellationToken ct = default)
+    {
+        var query = _db.BusInfoReports.AsNoTracking()
+            .Where(r => r.Status == "Published" || r.Status == "Verified");
+
+        if (!string.IsNullOrWhiteSpace(category) && !category.Equals("all", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(r => r.Category == category.Trim());
+
+        if (routeId.HasValue && routeId.Value > 0)
+            query = query.Where(r => r.RouteId == routeId.Value);
+
+        if (!string.IsNullOrWhiteSpace(fleetNumber))
+        {
+            var normalized = fleetNumber.Trim();
+            query = query.Where(r => r.FleetNumber == normalized);
+        }
+
+        var rows = await query
+            .OrderByDescending(r => r.VerifiedAt ?? r.CreatedAt)
+            .Take(50)
+            .ToListAsync(ct);
+
+        var routeIds = rows.Where(r => r.RouteId.HasValue).Select(r => r.RouteId!.Value).Distinct().ToList();
+        var routeMap = routeIds.Count > 0
+            ? await _db.Routes.AsNoTracking()
+                .Where(r => routeIds.Contains(r.Id))
+                .ToDictionaryAsync(r => r.Id, r => new { r.Code, r.Name }, ct)
+            : new();
+
+        return Ok(rows.Select(r =>
+        {
+            var route = r.RouteId.HasValue && routeMap.TryGetValue(r.RouteId.Value, out var found) ? found : null;
+            return new
+            {
+                r.Id,
+                r.Category,
+                r.FleetNumber,
+                r.RouteId,
+                routeCode = route?.Code,
+                routeName = route?.Name,
+                r.TripId,
+                r.ReportedStopName,
+                r.ProposedTime,
+                r.DelayMinutes,
+                r.Description,
+                r.Status,
+                r.AdminNotes,
+                verifiedAt = r.VerifiedAt is DateTime v ? IndiaClock.AsUtc(v) : (DateTime?)null,
+                r.VerifiedBy,
+                createdAt = IndiaClock.AsUtc(r.CreatedAt)
+            };
+        }));
     }
 }
 

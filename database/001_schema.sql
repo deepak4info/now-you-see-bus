@@ -312,3 +312,62 @@ BEGIN
         FirstSeenAt DATETIME2 NOT NULL CONSTRAINT DF_Visitors_FirstSeenAt DEFAULT SYSUTCDATETIME()
     );
 END;
+
+IF OBJECT_ID(N'dbo.StopReminders', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.StopReminders (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_StopReminders PRIMARY KEY,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        TripId INT NULL,
+        RouteId INT NOT NULL,
+        StopId INT NOT NULL,
+        StopName NVARCHAR(120) NOT NULL,
+        FleetNumber NVARCHAR(20) NOT NULL,
+        RemindBeforeMinutes INT NOT NULL CONSTRAINT DF_StopReminders_Lead DEFAULT 10,
+        TargetDate DATE NOT NULL,
+        IsTriggered BIT NOT NULL CONSTRAINT DF_StopReminders_Triggered DEFAULT 0,
+        TriggeredAt DATETIME2 NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_StopReminders_Created DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_StopReminders_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id),
+        CONSTRAINT FK_StopReminders_Routes FOREIGN KEY (RouteId) REFERENCES dbo.Routes(Id),
+        CONSTRAINT FK_StopReminders_Stops FOREIGN KEY (StopId) REFERENCES dbo.Stops(Id)
+    );
+    CREATE INDEX IX_StopReminders_Route_Active ON dbo.StopReminders(RouteId, TargetDate, IsTriggered);
+    CREATE INDEX IX_StopReminders_User ON dbo.StopReminders(UserId, CreatedAt DESC);
+END;
+
+IF OBJECT_ID(N'dbo.BusInfoReports', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.BusInfoReports (
+        Id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_BusInfoReports PRIMARY KEY,
+        UserId UNIQUEIDENTIFIER NULL,
+        TripId INT NULL,
+        RouteId INT NULL,
+        BusId INT NULL,
+        FleetNumber NVARCHAR(20) NOT NULL,
+        Category NVARCHAR(40) NOT NULL,
+        ReportedStopName NVARCHAR(120) NULL,
+        ProposedTime NVARCHAR(40) NULL,
+        DelayMinutes INT NULL,
+        Description NVARCHAR(500) NOT NULL,
+        Status NVARCHAR(20) NOT NULL CONSTRAINT DF_BusInfoReports_Status DEFAULT N'Open',
+        AdminNotes NVARCHAR(500) NULL,
+        VerifiedAt DATETIME2 NULL,
+        VerifiedBy NVARCHAR(100) NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_BusInfoReports_Created DEFAULT SYSUTCDATETIME()
+    );
+    CREATE INDEX IX_BusInfoReports_Status_Created ON dbo.BusInfoReports(Status, CreatedAt DESC);
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'dbo.BusInfoReports', N'ProposedTime') IS NULL
+        ALTER TABLE dbo.BusInfoReports ADD ProposedTime NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'dbo.BusInfoReports', N'DelayMinutes') IS NULL
+        ALTER TABLE dbo.BusInfoReports ADD DelayMinutes INT NULL;
+    IF COL_LENGTH(N'dbo.BusInfoReports', N'AdminNotes') IS NULL
+        ALTER TABLE dbo.BusInfoReports ADD AdminNotes NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'dbo.BusInfoReports', N'VerifiedAt') IS NULL
+        ALTER TABLE dbo.BusInfoReports ADD VerifiedAt DATETIME2 NULL;
+    IF COL_LENGTH(N'dbo.BusInfoReports', N'VerifiedBy') IS NULL
+        ALTER TABLE dbo.BusInfoReports ADD VerifiedBy NVARCHAR(100) NULL;
+END;

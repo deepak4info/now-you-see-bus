@@ -46,6 +46,11 @@ builder.Services.AddSingleton<ITransitCache>(sp => new TransitCacheService(
     sp.GetRequiredService<ILogger<TransitCacheService>>(),
     useRedis));
 
+builder.Services.AddSingleton<IShardRouter>(sp => new ShardRouter(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<IShardedDataService>(sp => new ShardedDataService(
+    sp.GetRequiredService<IShardRouter>(),
+    sp.GetRequiredService<ILogger<ShardedDataService>>()));
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 builder.Services.AddScoped<TrackingService>();
@@ -61,6 +66,7 @@ builder.Services.AddScoped<TelemetryService>();
 builder.Services.AddSingleton<PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtIssuer>();
 builder.Services.AddHostedService<TripSimulator>();
+builder.Services.AddHostedService<TripArchiveHostedService>();
 builder.Services.AddSignalR();
 builder.Services.AddControllers();
 
@@ -250,7 +256,7 @@ app.MapGet("/api", () => Results.Ok(new
     documentation = "/swagger"
 }));
 
-app.MapGet("/api/health", async (AppDbContext db, ITransitCache cache) =>
+app.MapGet("/api/health", async (AppDbContext db, ITransitCache cache, IShardedDataService shards) =>
 {
     var can = await db.Database.CanConnectAsync();
     var ops = await db.SystemSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "OperationsLive");
@@ -259,6 +265,8 @@ app.MapGet("/api/health", async (AppDbContext db, ITransitCache cache) =>
         status = can ? "ok" : "degraded",
         database = can,
         cacheProvider = cache.IsRedisConfigured ? "Redis" : "Memory",
+        shardingEnabled = shards.IsEnabled,
+        activeShards = shards.Router.ActiveShards.Count,
         operationsLive = string.Equals(ops?.Value, "true", StringComparison.OrdinalIgnoreCase)
     });
 });

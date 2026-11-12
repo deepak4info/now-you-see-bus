@@ -1,6 +1,7 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Star } from "lucide-react";
+import { LiveJourneyPanel } from "@/components/LiveJourneyPanel";
 import { MapView, type BusPin } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StopTimeline } from "@/components/StopTimeline";
@@ -17,7 +18,7 @@ import { api, useQuery } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { ago, formatClock, formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly, rupee } from "@/lib/format";
 import { useBusLive } from "@/lib/live";
-import type { SearchResponse, StopOption, TrackSnapshot } from "@/lib/types";
+import type { DelayAlertEvent, SearchResponse, StopOption, TrackSnapshot } from "@/lib/types";
 
 export function BusPage() {
   const { fleet = "" } = useParams();
@@ -50,11 +51,13 @@ export function BusPage() {
   );
   const query = hasJourney && (searchSnapshot != null || !trackQuery.data) ? searchQuery : trackQuery;
   const seed = searchSnapshot ?? trackQuery.data;
+  const [delayAlert, setDelayAlert] = useState<DelayAlertEvent | null>(null);
   const live = useBusLive(
     fleet,
     seed,
     requestedRouteId ?? seed?.routeId,
     !tripId && date === getIndiaDate() && seed?.status !== "Completed" && seed?.status !== "Cancelled",
+    (alert) => setDelayAlert(alert),
   );
   const { user } = useAuth();
   const stopOptions = useQuery<StopOption[]>("/api/stops");
@@ -168,6 +171,11 @@ export function BusPage() {
         longitude: effectiveLive.longitude,
         heading: effectiveLive.heading,
         label: effectiveLive.fleetNumber,
+        fleetNumber: effectiveLive.fleetNumber,
+        routeCode: effectiveLive.routeCode,
+        routeName: effectiveLive.routeName,
+        speedKmph: effectiveLive.speedKmph,
+        status: effectiveLive.status,
         variant: "live",
         recordedAt: effectiveLive.recordedAt,
       };
@@ -179,6 +187,11 @@ export function BusPage() {
         longitude: effectiveLive.longitude,
         heading: effectiveLive.heading,
         label: effectiveLive.fleetNumber,
+        fleetNumber: effectiveLive.fleetNumber,
+        routeCode: effectiveLive.routeCode,
+        routeName: effectiveLive.routeName,
+        speedKmph: effectiveLive.speedKmph,
+        status: effectiveLive.status,
         variant: "last-known",
         recordedAt: effectiveLive.recordedAt,
       };
@@ -297,6 +310,14 @@ export function BusPage() {
             )}
           </div>
           {note && <p className="text-sm text-muted-foreground">{note}</p>}
+
+          <LiveJourneyPanel
+            snapshot={effectiveLive}
+            from={from}
+            to={to}
+            date={date}
+            delayAlert={delayAlert}
+          />
         </section>
 
         <section className="min-h-[420px] overflow-hidden rounded-2xl border bg-card">
@@ -318,7 +339,10 @@ export function BusPage() {
               {trackingStatus === "live" ? (
                 <>
                   <span className="pulse" />
-                  <span>GPS location · updated {ago(effectiveLive.recordedAt)}</span>
+                  <span>
+                    GPS location · updated {ago(effectiveLive.recordedAt)}
+                    {effectiveLive.speedKmph != null ? ` · ${Math.round(effectiveLive.speedKmph)} km/h` : ""}
+                  </span>
                 </>
               ) : trackingStatus === "signal-lost" ? (
                 <>

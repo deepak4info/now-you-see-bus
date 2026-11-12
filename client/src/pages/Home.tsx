@@ -9,6 +9,7 @@ import { TrackingNotice, computeTrackingStatus } from "@/components/TrackingNoti
 import { Button } from "@/components/ui/button";
 import { resolveUrl, useQuery } from "@/lib/api";
 import { formatDateWithWeekday, formatEta, getIndiaDate, isDateOnly } from "@/lib/format";
+import { useI18n } from "@/lib/i18n";
 import { useBusLive } from "@/lib/live";
 import { getRecentSearch, saveRecentSearch, type RecentSearch } from "@/lib/recentSearch";
 import type { PublicRoute, SearchResponse, StopOption, TrackSnapshot } from "@/lib/types";
@@ -18,6 +19,7 @@ const EMPTY_PATH: TrackSnapshot["path"] = [];
 const EMPTY_STOPS: TrackSnapshot["stops"] = [];
 
 export function HomePage() {
+  const { t } = useI18n();
   const [homeParams] = useSearchParams();
   const [recentSearch, setRecentSearch] = useState<RecentSearch>(
     () => getRecentSearch() ?? { from: "Hisar", to: "Fatehabad" },
@@ -226,7 +228,7 @@ export function HomePage() {
       <div className="contents">
         <section className="order-1 py-1 lg:col-start-1 lg:row-start-1 lg:self-center">
           <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">
-            <span className="pulse" /> Haryana Roadways · Live service
+            <span className="pulse" /> {t("searchHeroKicker")}
           </span>
           <h1 className="mt-2 font-display text-4xl leading-tight tracking-tight text-ink sm:text-5xl">
             Find your bus. <span className="text-primary">Follow the route.</span>
@@ -397,7 +399,7 @@ export function HomePage() {
         </div>
         <form onSubmit={search} className="mt-4 grid gap-3">
           <div className="relative grid w-full grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-x-10">
-            <StopField key={`from-${stopFieldsVersion}`} label="From" value={from} stops={stops.data ?? []} loading={stops.loading} onChange={setFrom} icon={BusFront} />
+            <StopField key={`from-${stopFieldsVersion}`} label={t("searchFromLabel")} value={from} stops={stops.data ?? []} loading={stops.loading} onChange={setFrom} icon={BusFront} />
             <button
               type="button"
               aria-label="Swap boarding stop and destination"
@@ -411,11 +413,11 @@ export function HomePage() {
             >
               <ArrowLeftRight aria-hidden="true" className="h-4 w-4" />
             </button>
-            <StopField key={`to-${stopFieldsVersion}`} label="To" value={to} stops={stops.data ?? []} loading={stops.loading} onChange={setTo} icon={MapPin} />
+            <StopField key={`to-${stopFieldsVersion}`} label={t("searchToLabel")} value={to} stops={stops.data ?? []} loading={stops.loading} onChange={setTo} icon={MapPin} />
             <label htmlFor="travel-date" className="flex min-h-[76px] min-w-0 items-center gap-3 rounded-xl border border-border/80 bg-background/50 px-3 py-3 transition-colors focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/15 sm:px-4">
               <CalendarDays aria-hidden="true" className="h-6 w-6 shrink-0 text-ink" />
               <span className="grid min-w-0 flex-1 gap-1">
-                <span className="text-xs font-medium text-muted-foreground">Date of journey</span>
+                <span className="text-xs font-medium text-muted-foreground">{t("searchDateLabel")}</span>
                 <input
                   id="travel-date"
                   type="date"
@@ -432,7 +434,7 @@ export function HomePage() {
             </label>
             <Button type="submit" size="lg" className="h-full min-h-[64px] w-full rounded-xl text-base shadow-md shadow-primary/10 transition-colors sm:min-h-[76px]">
               <Search aria-hidden="true" className="h-5 w-5" />
-              Search buses
+              {t("findBusesBtn")}
             </Button>
           </div>
           {stops.error && <p className="text-sm text-destructive">{stops.error}</p>}

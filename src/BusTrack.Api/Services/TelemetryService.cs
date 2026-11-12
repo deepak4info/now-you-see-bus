@@ -221,25 +221,18 @@ public class TelemetryService
 
             try
             {
-                _db.AuditLogs.Add(new AuditLog
+                var detailJson = JsonSerializer.Serialize(new
                 {
-                    Action = "IoTTelemetryAnomaly",
-                    Entity = "IoTDevice",
-                    EntityId = packet.DeviceUid,
-                    Detail = JsonSerializer.Serialize(new
-                    {
-                        packet.FleetNumber,
-                        packet.Latitude,
-                        packet.Longitude,
-                        packet.SpeedKmph,
-                        impliedSpeedKmph = impliedSpeed,
-                        anomalies,
-                        trustScore = state.TrustScore,
-                        status = GetDeviceStatusString(state.TrustScore)
-                    }),
-                    CreatedAt = now
+                    packet.FleetNumber,
+                    packet.Latitude,
+                    packet.Longitude,
+                    packet.SpeedKmph,
+                    impliedSpeedKmph = impliedSpeed,
+                    anomalies,
+                    trustScore = state.TrustScore,
+                    status = GetDeviceStatusString(state.TrustScore)
                 });
-                await _db.SaveChangesAsync(ct);
+                await _tracking.Audit(null, "IoTTelemetryAnomaly", "IoTDevice", packet.DeviceUid, detailJson, ct);
             }
             catch (Exception ex)
             {

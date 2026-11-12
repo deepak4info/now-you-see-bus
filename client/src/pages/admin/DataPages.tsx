@@ -6,11 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, resolveUrl, useQuery } from "@/lib/api";
 import { formatClock, formatEta } from "@/lib/format";
-import type { TrackSnapshot } from "@/lib/types";
+import type { CommunityUpdateItem, TrackSnapshot } from "@/lib/types";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { MapView } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
-import { AlertCircle, ArrowDown, ArrowUp, BusFront, CheckCircle2, ChevronDown, Edit3, GripVertical, IndianRupee, MapPin, Route as RouteIcon, Search, Sparkles, Trash2, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, BusFront, Check, CheckCircle2, ChevronDown, Edit3, GripVertical, IndianRupee, MapPin, MessageSquare, Route as RouteIcon, Search, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 
 type Operator = { id: number; name: string; code: string; contactName: string | null; phone: string | null; email: string | null };
 type Bus = { id: number; operatorId: number; operatorName: string; fleetNumber: string; registrationNumber: string; model: string | null; capacity: number; busType: string; assignedDriverId: number | null; driverName: string | null };
@@ -2362,36 +2362,185 @@ export function LivePage() {
 }
 
 export function ReportsPage() {
-  const query = useQuery<TrackSnapshot[]>("/api/admin/reports/trips");
+  const [reportTab, setReportTab] = useState<"trips" | "community">("trips");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [noteInputs, setNoteInputs] = useState<Record<number, string>>({});
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  const query = useQuery<TrackSnapshot[]>(reportTab === "trips" ? "/api/admin/reports/trips" : null);
+  const communityQuery = useQuery<CommunityUpdateItem[]>(
+    reportTab === "community" ? `/api/admin/reports/feedback?status=${encodeURIComponent(statusFilter)}` : null,
+  );
+
+  async function verifyUpdate(id: number, status: "Published" | "Rejected" | "Resolved") {
+    setUpdatingId(id);
+    try {
+      await api(`/api/admin/reports/feedback/${id}/status`, {
+        method: "POST",
+        body: JSON.stringify({
+          status,
+          adminNotes: noteInputs[id] || null,
+          publishAlert: status === "Published",
+        }),
+      });
+      await communityQuery.reload();
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
   return (
-    <Page title="Trip report" subtitle="Today's trips, with delay against the 42 km/h timetable." loading={query.loading} error={query.error}>
-      <Table
-        className="max-w-6xl"
-        headers={[
-          { label: "#", className: "w-12 text-center whitespace-nowrap" },
-          { label: "Bus", className: "whitespace-nowrap" },
-          { label: "Route", className: "whitespace-nowrap" },
-          { label: "Departs", className: "whitespace-nowrap" },
-          { label: "Status", className: "whitespace-nowrap" },
-          { label: "Now", className: "whitespace-nowrap" },
-          { label: "Delay", className: "whitespace-nowrap" },
-          { label: "Driver", className: "whitespace-nowrap" },
-        ]}
-      >
-        {query.data?.map((row, index) => (
-          <tr key={row.tripId} className="border-t hover:bg-muted/30 transition-colors">
-            <td className="px-3 py-2.5 text-center text-xs text-muted-foreground whitespace-nowrap">{index + 1}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap font-medium">{row.fleetNumber} · {row.registrationNumber}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap font-mono text-xs">{row.routeCode}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap">{formatClock(row.departureTime)}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap">{row.status}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap">{row.currentStop ?? "—"}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap">{row.outsideSlot ? "Outside the printed slot" : row.delayMinutes != null && row.delayMinutes > 2 ? `${row.delayMinutes} min late` : "On time"}</td>
-            <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{row.driverName ?? "—"}</td>
-          </tr>
-        ))}
-      </Table>
-      {query.data && query.data.length === 0 && <p className="mt-3 text-sm text-muted-foreground">No trips yet. Start operations from the overview.</p>}
+    <Page
+      title={reportTab === "trips" ? "Trip & Community Reports" : "Community Updates Queue"}
+      subtitle={
+        reportTab === "trips"
+          ? "Today's trips, with delay against the 42 km/h timetable."
+          : "Verify passenger-submitted bus delays, cancellations, route suggestions & updated timings before publishing."
+      }
+      action={
+        <div className="flex items-center gap-2 rounded-xl border bg-muted/40 p-1">
+          <button
+            type="button"
+            onClick={() => setReportTab("trips")}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              reportTab === "trips" ? "bg-card text-ink shadow-xs" : "text-muted-foreground hover:text-ink"
+            }`}
+          >
+            Trip Dispatch Report
+          </button>
+          <button
+            type="button"
+            onClick={() => setReportTab("community")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              reportTab === "community" ? "bg-card text-ink shadow-xs" : "text-muted-foreground hover:text-ink"
+            }`}
+          >
+            <MessageSquare className="h-3.5 w-3.5 text-pine" /> Community Updates
+          </button>
+        </div>
+      }
+      loading={reportTab === "trips" ? query.loading : communityQuery.loading}
+      error={reportTab === "trips" ? query.error : communityQuery.error}
+    >
+      {reportTab === "trips" ? (
+        <>
+          <Table
+            className="max-w-6xl"
+            headers={[
+              { label: "#", className: "w-12 text-center whitespace-nowrap" },
+              { label: "Bus", className: "whitespace-nowrap" },
+              { label: "Route", className: "whitespace-nowrap" },
+              { label: "Departs", className: "whitespace-nowrap" },
+              { label: "Status", className: "whitespace-nowrap" },
+              { label: "Now", className: "whitespace-nowrap" },
+              { label: "Delay", className: "whitespace-nowrap" },
+              { label: "Driver", className: "whitespace-nowrap" },
+            ]}
+          >
+            {query.data?.map((row, index) => (
+              <tr key={row.tripId} className="border-t hover:bg-muted/30 transition-colors">
+                <td className="px-3 py-2.5 text-center text-xs text-muted-foreground whitespace-nowrap">{index + 1}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap font-medium">{row.fleetNumber} · {row.registrationNumber}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap font-mono text-xs">{row.routeCode}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap">{formatClock(row.departureTime)}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap">{row.status}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap">{row.currentStop ?? "—"}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap">{row.outsideSlot ? "Outside the printed slot" : row.delayMinutes != null && row.delayMinutes > 2 ? `${row.delayMinutes} min late` : "On time"}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{row.driverName ?? "—"}</td>
+              </tr>
+            ))}
+          </Table>
+          {query.data && query.data.length === 0 && <p className="mt-3 text-sm text-muted-foreground">No trips yet. Start operations from the overview.</p>}
+        </>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-semibold text-muted-foreground mr-1">Filter Status:</span>
+            {["all", "Pending", "Published", "Rejected", "Open", "Resolved"].map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatusFilter(st)}
+                className={`rounded-full px-3 py-1 font-medium transition-colors ${
+                  statusFilter === st ? "bg-pine text-white" : "border bg-card text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                {st === "all" ? "All Submissions" : st}
+              </button>
+            ))}
+          </div>
+
+          {communityQuery.data && communityQuery.data.length === 0 && (
+            <p className="rounded-xl border border-dashed bg-card p-6 text-center text-sm text-muted-foreground">
+              No community submissions match this status filter.
+            </p>
+          )}
+
+          <div className="grid gap-3 max-w-5xl">
+            {communityQuery.data?.map((item) => (
+              <article key={item.id} className="rounded-xl border bg-card p-4 shadow-2xs">
+                <div className="flex flex-wrap items-start justify-between gap-2 border-b pb-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-ink">
+                      {item.category}
+                    </span>
+                    <span className="font-semibold text-sm text-ink">
+                      Bus/Corridor: {item.fleetNumber} {item.routeCode ? `(Route ${item.routeCode})` : ""}
+                    </span>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                        item.status === "Published" || item.status === "Verified"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : item.status === "Rejected"
+                          ? "bg-red-100 text-red-800"
+                          : "bg-amber-100 text-amber-800"
+                      }`}
+                    >
+                      {item.status}
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{formatClock(item.createdAt)}</span>
+                </div>
+
+                <p className="mt-2.5 text-sm text-ink leading-relaxed">{item.description}</p>
+
+                <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                  {item.reportedStopName && <span><b>Stop/Route:</b> {item.reportedStopName}</span>}
+                  {item.delayMinutes && <span><b>Delay reported:</b> +{item.delayMinutes} min</span>}
+                  {item.proposedTime && <span><b>Proposed time:</b> {item.proposedTime}</span>}
+                  {item.verifiedBy && <span><b>Verified by:</b> {item.verifiedBy}</span>}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+                  <Input
+                    placeholder="Admin verification note (optional, visible when published)..."
+                    value={noteInputs[item.id] ?? item.adminNotes ?? ""}
+                    onChange={(e) => setNoteInputs((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                    className="h-8 flex-1 text-xs min-w-[200px]"
+                  />
+                  <Button
+                    size="sm"
+                    disabled={updatingId === item.id || item.status === "Published"}
+                    onClick={() => void verifyUpdate(item.id, "Published")}
+                    className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Verify & Publish
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={updatingId === item.id || item.status === "Rejected"}
+                    onClick={() => void verifyUpdate(item.id, "Rejected")}
+                    className="h-8 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    <X className="mr-1 h-3.5 w-3.5" /> Reject
+                  </Button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
     </Page>
   );
 }

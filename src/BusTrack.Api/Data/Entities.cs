@@ -226,3 +226,41 @@ public class Visitor
     public Guid Id { get; set; }
     public DateTime FirstSeenAt { get; set; }
 }
+
+public class StopReminder
+{
+    public int Id { get; set; }
+    public Guid UserId { get; set; }
+    public int? TripId { get; set; }
+    public int RouteId { get; set; }
+    public Route? Route { get; set; }
+    public int StopId { get; set; }
+    public Stop? Stop { get; set; }
+    public string StopName { get; set; } = "";
+    public string FleetNumber { get; set; } = "";
+    public int RemindBeforeMinutes { get; set; } = 10;
+    public DateOnly TargetDate { get; set; }
+    public bool IsTriggered { get; set; }
+    public DateTime? TriggeredAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class BusInfoReport
+{
+    public int Id { get; set; }
+    public Guid? UserId { get; set; }
+    public int? TripId { get; set; }
+    public int? RouteId { get; set; }
+    public int? BusId { get; set; }
+    public string FleetNumber { get; set; } = "";
+    public string Category { get; set; } = "Other";
+    public string? ReportedStopName { get; set; }
+    public string? ProposedTime { get; set; }
+    public int? DelayMinutes { get; set; }
+    public string Description { get; set; } = "";
+    public string Status { get; set; } = "Pending";
+    public string? AdminNotes { get; set; }
+    public DateTime? VerifiedAt { get; set; }
+    public string? VerifiedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+}

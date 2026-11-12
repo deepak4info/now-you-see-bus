@@ -41,7 +41,7 @@ public class AdminController : ControllerBase
             var snap = await _tracking.GetTripAsync(trip.Id, ct);
             if (snap is not null) running.Add(snap);
         }
-        var audit = await _db.AuditLogs.AsNoTracking().OrderByDescending(a => a.CreatedAt).Take(8).ToListAsync(ct);
+        var audit = await _tracking.QueryAuditLogsAsync(8, ct: ct);
         return Ok(new
         {
             operationsLive = await _tracking.OperationsAreLive(ct),
@@ -134,20 +134,39 @@ public class AdminController : ControllerBase
     [HttpGet("audit-logs")]
     public async Task<IActionResult> AuditLogs([FromQuery] int limit = 50, CancellationToken ct = default)
     {
-        var logs = await _db.AuditLogs.AsNoTracking()
-            .OrderByDescending(a => a.CreatedAt)
-            .Take(Math.Clamp(limit, 1, 200))
-            .Select(a => new
-            {
-                a.Id,
-                a.Action,
-                a.Entity,
-                a.EntityId,
-                a.Detail,
-                a.CreatedAt
-            })
-            .ToListAsync(ct);
-        return Ok(logs);
+        var logs = await _tracking.QueryAuditLogsAsync(Math.Clamp(limit, 1, 200), ct: ct);
+        return Ok(logs.Select(a => new
+        {
+            a.Id,
+            a.Action,
+            a.Entity,
+            a.EntityId,
+            a.Detail,
+            a.CreatedAt
+        }));
+    }
+
+    [HttpGet("sharding/status")]
+    public async Task<IActionResult> ShardingStatus(CancellationToken ct)
+    {
+        return Ok(await _tracking.GetShardingHealthAsync(ct));
+    }
+
+    [HttpGet("sharding/route-preview")]
+    public IActionResult ShardingRoutePreview(
+        [FromQuery] int tripId = 1,
+        [FromQuery] double? lat = null,
+        [FromQuery] double? lng = null,
+        [FromQuery] string? region = null)
+    {
+        return Ok(_tracking.PreviewShardRoute(tripId, lat, lng, region));
+    }
+
+    [HttpPost("sharding/archive")]
+    public async Task<IActionResult> TriggerTripArchive([FromQuery] int? retentionDays = null, CancellationToken ct = default)
+    {
+        var result = await _tracking.ArchiveHistoricalTripsAsync(retentionDays, ct);
+        return Ok(result);
     }
 
     [HttpPost("operators")]
@@ -771,11 +790,9 @@ public class AdminController : ControllerBase
         var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
         var stops = await _db.RouteStops.AsNoTracking().Include(rs => rs.Stop).OrderBy(rs => rs.SequenceNo).ToListAsync(ct);
         var fares = await _db.FareSlabs.AsNoTracking().Include(f => f.FromStop).Include(f => f.ToStop).ToListAsync(ct);
-        var createdRows = await _db.AuditLogs.AsNoTracking()
-            .Where(a => a.Entity == "Route" && a.Action == "Create" && a.EntityId != null)
-            .Select(a => new { a.EntityId, a.CreatedAt })
-            .ToListAsync(ct);
+        var createdRows = await _tracking.QueryAuditLogsAsync(2000, actionFilter: "Create", entityFilter: "Route", ct: ct);
         var addedAtById = createdRows
+            .Where(a => a.EntityId != null)
             .GroupBy(a => a.EntityId!)
             .ToDictionary(g => g.Key, g => g.Max(a => a.CreatedAt));
         return Ok(routes.Select(r => new
@@ -1189,6 +1206,124 @@ public class AdminController : ControllerBase
             if (snap is not null) rows.Add(snap);
         }
         return Ok(rows.OrderBy(r => r.DepartureTime));
+    }
+
+    [HttpGet("reports/feedback")]
+    public async Task<IActionResult> PassengerFeedbackReports(
+        [FromQuery] string? status = null,
+        [FromQuery] string? category = null,
+        CancellationToken ct = default)
+    {
+        var query = _db.BusInfoReports.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(status) && !status.Equals("all", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(r => r.Status == status.Trim());
+        if (!string.IsNullOrWhiteSpace(category) && !category.Equals("all", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(r => r.Category == category.Trim());
+
+        var rows = await query
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(200)
+            .ToListAsync(ct);
+
+        var routeIds = rows.Where(r => r.RouteId.HasValue).Select(r => r.RouteId!.Value).Distinct().ToList();
+        var routeMap = routeIds.Count > 0
+            ? await _db.Routes.AsNoTracking()
+                .Where(r => routeIds.Contains(r.Id))
+                .ToDictionaryAsync(r => r.Id, r => new { r.Code, r.Name }, ct)
+            : new();
+
+        return Ok(rows.Select(r =>
+        {
+            var route = r.RouteId.HasValue && routeMap.TryGetValue(r.RouteId.Value, out var found) ? found : null;
+            return new
+            {
+                r.Id,
+                r.UserId,
+                r.TripId,
+                r.RouteId,
+                routeCode = route?.Code,
+                routeName = route?.Name,
+                r.BusId,
+                r.FleetNumber,
+                r.Category,
+                r.ReportedStopName,
+                r.ProposedTime,
+                r.DelayMinutes,
+                r.Description,
+                r.Status,
+                r.AdminNotes,
+                verifiedAt = r.VerifiedAt is DateTime v ? IndiaClock.AsUtc(v) : (DateTime?)null,
+                r.VerifiedBy,
+                createdAt = IndiaClock.AsUtc(r.CreatedAt)
+            };
+        }));
+    }
+
+    [HttpPost("reports/feedback/{id:int}/status")]
+    public async Task<IActionResult> UpdatePassengerFeedbackStatus(int id, UpdateBusReportStatusRequest request, CancellationToken ct)
+    {
+        var status = (request.Status ?? "").Trim();
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Published", "Verified", "Rejected", "Reviewed", "Open", "Resolved"
+        };
+        if (!allowed.TryGetValue(status, out var canonicalStatus))
+            return BadRequest(new { message = "Status must be Published, Verified, Rejected, Reviewed, Open, or Resolved." });
+
+        var row = await _db.BusInfoReports.FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (row is null) return NotFound(new { message = "Report not found." });
+
+        row.Status = canonicalStatus;
+        if (!string.IsNullOrWhiteSpace(request.AdminNotes))
+        {
+            var notes = request.AdminNotes.Trim();
+            row.AdminNotes = notes.Length > 500 ? notes[..500] : notes;
+        }
+
+        var adminIdentifier = User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(adminIdentifier))
+        {
+            var adminUser = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == User.Id(), ct);
+            adminIdentifier = adminUser?.FullName ?? "Transport Admin";
+        }
+
+        row.VerifiedAt = DateTime.UtcNow;
+        row.VerifiedBy = adminIdentifier;
+
+        // If published/verified and admin requested public alert on an active trip:
+        if ((request.PublishAlert || canonicalStatus == "Published") && row.TripId.HasValue)
+        {
+            var tripUsers = await _db.Notifications
+                .Where(n => n.TripId == row.TripId.Value)
+                .Select(n => n.UserId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            foreach (var uid in tripUsers)
+            {
+                _db.Notifications.Add(new Notification
+                {
+                    UserId = uid,
+                    TripId = row.TripId,
+                    Title = $"Verified Community Update · Bus {row.FleetNumber}",
+                    Body = $"{row.Category}: {row.Description}",
+                    Kind = row.Category.Contains("Delay", StringComparison.OrdinalIgnoreCase) ? "delayed" : "alert",
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _tracking.Audit(User.Id(), "VerifyCommunityUpdate", "BusInfoReport", row.Id.ToString(), $"Marked report #{row.Id} as {canonicalStatus}. Notes: {row.AdminNotes}", ct);
+        return Ok(new
+        {
+            row.Id,
+            row.Status,
+            row.AdminNotes,
+            verifiedAt = row.VerifiedAt is DateTime v ? IndiaClock.AsUtc(v) : (DateTime?)null,
+            row.VerifiedBy
+        });
     }
 
     private async Task ReplaceStops(int routeId, RouteRequest request, CancellationToken ct)
