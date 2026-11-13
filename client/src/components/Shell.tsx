@@ -7,7 +7,6 @@ import { api } from "@/lib/api";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { PwaBanner, InstallAppButton } from "./PwaBanner";
-import { AiFloatingButton } from "./ai/AiFloatingButton";
 
 const VISITOR_ID_KEY = "wimb_visitor_id";
 
@@ -150,7 +149,6 @@ export function Shell({ children }: { children: ReactNode }) {
           <p className="w-full text-xs text-muted-foreground sm:w-auto">{t("visitorsHint")}</p>
         </div>
       </footer>
-      <AiFloatingButton />
     </div>
   );
 }
