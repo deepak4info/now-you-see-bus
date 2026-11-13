@@ -88,16 +88,16 @@ async function fetchRoadGeometry(stops: StopPin[]): Promise<{ latitude: number; 
 }
 
 export function MapView({
-  path,
-  stops,
+  path = [],
+  stops = [],
   bus,
   buses,
   focusBus = false,
   className,
   onBusClick,
 }: {
-  path: { latitude: number; longitude: number }[];
-  stops: StopPin[];
+  path?: { latitude: number; longitude: number }[];
+  stops?: StopPin[];
   bus?: BusPin | null;
   buses?: BusPin[];
   focusBus?: boolean;
@@ -110,12 +110,15 @@ export function MapView({
   const fitted = useRef("");
   const [resolvedRoad, setResolvedRoad] = useState<{ latitude: number; longitude: number }[] | null>(null);
 
+  const safePath = path ?? [];
+  const safeStops = stops ?? [];
+
   // If backend path is sparse or straight-line densified, resolve road geometry via highway routing
   useEffect(() => {
     let active = true;
-    const isSparse = path.length <= Math.max(stops.length * 3, 25);
-    if (isSparse && stops.length >= 2) {
-      fetchRoadGeometry(stops).then((road) => {
+    const isSparse = safePath.length <= Math.max(safeStops.length * 3, 25);
+    if (isSparse && safeStops.length >= 2) {
+      fetchRoadGeometry(safeStops).then((road) => {
         if (active && road && road.length > 1) {
           setResolvedRoad(road);
         }
@@ -126,167 +129,188 @@ export function MapView({
     return () => {
       active = false;
     };
-  }, [path, stops]);
+  }, [safePath, safeStops]);
 
-  const effectivePath = resolvedRoad && resolvedRoad.length > 1 ? resolvedRoad : path;
-  const activeBuses: BusPin[] = buses && buses.length > 0 ? buses : (bus ? [bus] : []);
+  const effectivePath = resolvedRoad && resolvedRoad.length > 1 ? resolvedRoad : safePath;
+  const activeBuses: BusPin[] = (buses && buses.length > 0 ? buses : (bus ? [bus] : [])).filter(
+    (b) => b && typeof b.latitude === "number" && !isNaN(b.latitude) && typeof b.longitude === "number" && !isNaN(b.longitude),
+  );
 
   useEffect(() => {
     if (!el.current || mapRef.current) return;
-    const map = L.map(el.current, { zoomControl: false });
-    L.control.zoom({ position: "bottomright" }).addTo(map);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap",
-      maxZoom: 19,
-    }).addTo(map);
-    map.setView([29.45, 75.72], 8);
-    layerRef.current = L.layerGroup().addTo(map);
-    mapRef.current = map;
-    let alive = true;
-    const timer = window.setTimeout(() => {
-      if (alive) map.invalidateSize();
-    }, 200);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      map.remove();
-      mapRef.current = null;
-      layerRef.current = null;
-    };
+    try {
+      if ((el.current as unknown as { _leaflet_id?: number })._leaflet_id != null) {
+        delete (el.current as unknown as { _leaflet_id?: number })._leaflet_id;
+      }
+      const map = L.map(el.current, { zoomControl: false });
+      L.control.zoom({ position: "bottomright" }).addTo(map);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap",
+        maxZoom: 19,
+      }).addTo(map);
+      map.setView([29.45, 75.72], 8);
+      layerRef.current = L.layerGroup().addTo(map);
+      mapRef.current = map;
+      let alive = true;
+      const timer = window.setTimeout(() => {
+        if (alive) map.invalidateSize();
+      }, 200);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+        map.remove();
+        mapRef.current = null;
+        layerRef.current = null;
+      };
+    } catch (err) {
+      console.warn("Leaflet map initialization skipped or caught:", err);
+    }
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
     const layer = layerRef.current;
     if (!map || !layer) return;
-    layer.clearLayers();
 
-    // 1. Draw Highway Road Polyline
-    if (effectivePath.length > 1) {
-      L.polyline(
-        effectivePath.map((p) => [p.latitude, p.longitude] as [number, number]),
-        { color: "#1d6b4f", weight: 6, opacity: 0.95 },
-      ).addTo(layer);
-    } else if (stops.length > 1) {
-      L.polyline(
-        stops.map((s) => [s.latitude, s.longitude] as [number, number]),
-        { color: "#1d6b4f", weight: 4, opacity: 0.8, dashArray: "6, 8" },
-      ).addTo(layer);
-    }
+    try {
+      layer.clearLayers();
 
-    // 2. Render Station Stops
-    stops.forEach((stop, index) => {
-      const isOrigin = index === 0;
-      const isDestination = index === stops.length - 1;
-      const fill = stop.status === "Current"
-        ? "#c4512c"
-        : stop.status === "Passed"
-        ? "#1d6b4f"
-        : isOrigin
-        ? "#16a34a"
-        : isDestination
-        ? "#dc2626"
-        : "#1b1714";
+      const validPath = effectivePath.filter(
+        (p) => p && typeof p.latitude === "number" && !isNaN(p.latitude) && typeof p.longitude === "number" && !isNaN(p.longitude),
+      );
+      const validStops = safeStops.filter(
+        (s) => s && typeof s.latitude === "number" && !isNaN(s.latitude) && typeof s.longitude === "number" && !isNaN(s.longitude),
+      );
 
-      const radius = isOrigin || isDestination ? 8 : 6;
-      const weight = isOrigin || isDestination ? 3 : 2;
+      // 1. Draw Highway Road Polyline
+      if (validPath.length > 1) {
+        L.polyline(
+          validPath.map((p) => [p.latitude, p.longitude] as [number, number]),
+          { color: "#1d6b4f", weight: 6, opacity: 0.95 },
+        ).addTo(layer);
+      } else if (validStops.length > 1) {
+        L.polyline(
+          validStops.map((s) => [s.latitude, s.longitude] as [number, number]),
+          { color: "#1d6b4f", weight: 4, opacity: 0.8, dashArray: "6, 8" },
+        ).addTo(layer);
+      }
 
-      const marker = L.circleMarker([stop.latitude, stop.longitude], {
-        radius,
-        color: "#ffffff",
-        weight,
-        fillColor: fill,
-        fillOpacity: 1,
-      }).bindTooltip(
-        `${isOrigin ? "Origin: " : isDestination ? "Destination: " : ""}${stop.name}`,
-        { direction: "top", offset: [0, -6] }
-      ).addTo(layer);
+      // 2. Render Station Stops
+      validStops.forEach((stop, index) => {
+        const isOrigin = index === 0;
+        const isDestination = index === validStops.length - 1;
+        const fill = stop.status === "Current"
+          ? "#c4512c"
+          : stop.status === "Passed"
+          ? "#1d6b4f"
+          : isOrigin
+          ? "#16a34a"
+          : isDestination
+          ? "#dc2626"
+          : "#1b1714";
 
-      const statusBadge = stop.status ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">Status: <b>${stop.status}</b></div>` : "";
-      marker.bindPopup(`
-        <div style="font-family: inherit; font-size: 13px; line-height: 1.4;">
-          <div style="font-weight: 700;">${stop.name}</div>
-          <div style="font-size: 11px; color: #64748b;">Stop #${index + 1} on route</div>
-          ${statusBadge}
-        </div>
-      `);
-    });
+        const radius = isOrigin || isDestination ? 8 : 6;
+        const weight = isOrigin || isDestination ? 3 : 2;
 
-    // 3. Render Bus Pins
-    activeBuses.forEach((b) => {
-      const label = b.label.replace(/[&<>"']/g, (character) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "\"": "&quot;",
-        "'": "&#39;",
-      })[character] ?? character);
+        const marker = L.circleMarker([stop.latitude, stop.longitude], {
+          radius,
+          color: "#ffffff",
+          weight,
+          fillColor: fill,
+          fillOpacity: 1,
+        }).bindTooltip(
+          `${isOrigin ? "Origin: " : isDestination ? "Destination: " : ""}${stop.name}`,
+          { direction: "top", offset: [0, -6] }
+        ).addTo(layer);
 
-      const isLastKnown = b.variant === "last-known";
-      const markerClass = isLastKnown ? "bus-marker bus-marker-last-known" : "bus-marker bus-marker-live";
-      const iconEmoji = isLastKnown ? "📡" : "🚌";
-      const badgeHtml = isLastKnown
-        ? `<div class="bus-marker-pill">Last known</div>`
-        : `<div class="bus-marker-live-dot" aria-hidden="true"></div>`;
-
-      const icon = L.divIcon({
-        className: "bus-marker-wrap",
-        html: `<div class="${markerClass}"><span aria-hidden="true">${iconEmoji}</span><b>${label}</b>${badgeHtml}</div>`,
-        iconSize: [46, 46],
-        iconAnchor: [23, 23],
+        const statusBadge = stop.status ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">Status: <b>${stop.status}</b></div>` : "";
+        marker.bindPopup(`
+          <div style="font-family: inherit; font-size: 13px; line-height: 1.4;">
+            <div style="font-weight: 700;">${stop.name}</div>
+            <div style="font-size: 11px; color: #64748b;">Stop #${index + 1} on route</div>
+            ${statusBadge}
+          </div>
+        `);
       });
 
-      const marker = L.marker([b.latitude, b.longitude], { icon, zIndexOffset: 900 }).addTo(layer);
+      // 3. Render Bus Pins
+      activeBuses.forEach((b) => {
+        const label = b.label.replace(/[&<>"']/g, (character) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          "\"": "&quot;",
+          "'": "&#39;",
+        })[character] ?? character);
 
-      const fleetTarget = b.fleetNumber || label;
-      const popupHtml = `
-        <div style="font-family: inherit; font-size: 13px; line-height: 1.4; min-width: 150px; padding: 2px;">
-          <div style="font-weight: 700; font-size: 15px;">Bus ${label}</div>
-          ${b.routeName ? `<div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">${b.routeName}</div>` : ""}
-          <div style="display: flex; align-items: center; gap: 5px; margin: 4px 0;">
-            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${isLastKnown ? "#f59e0b" : "#10b981"};"></span>
-            <span style="font-size: 11px; font-weight: 600;">${isLastKnown ? "Last known location" : "Live on road"}</span>
-            ${b.speedKmph != null && b.speedKmph > 0 ? `<span style="font-size: 11px; color: #64748b;">· ${Math.round(b.speedKmph)} km/h</span>` : ""}
+        const isLastKnown = b.variant === "last-known";
+        const markerClass = isLastKnown ? "bus-marker bus-marker-last-known" : "bus-marker bus-marker-live";
+        const iconEmoji = isLastKnown ? "📡" : "🚌";
+        const badgeHtml = isLastKnown
+          ? `<div class="bus-marker-pill">Last known</div>`
+          : `<div class="bus-marker-live-dot" aria-hidden="true"></div>`;
+
+        const icon = L.divIcon({
+          className: "bus-marker-wrap",
+          html: `<div class="${markerClass}"><span aria-hidden="true">${iconEmoji}</span><b>${label}</b>${badgeHtml}</div>`,
+          iconSize: [46, 46],
+          iconAnchor: [23, 23],
+        });
+
+        const marker = L.marker([b.latitude, b.longitude], { icon, zIndexOffset: 900 }).addTo(layer);
+
+        const fleetTarget = b.fleetNumber || label;
+        const popupHtml = `
+          <div style="font-family: inherit; font-size: 13px; line-height: 1.4; min-width: 150px; padding: 2px;">
+            <div style="font-weight: 700; font-size: 15px;">Bus ${label}</div>
+            ${b.routeName ? `<div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">${b.routeName}</div>` : ""}
+            <div style="display: flex; align-items: center; gap: 5px; margin: 4px 0;">
+              <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${isLastKnown ? "#f59e0b" : "#10b981"};"></span>
+              <span style="font-size: 11px; font-weight: 600;">${isLastKnown ? "Last known location" : "Live on road"}</span>
+              ${b.speedKmph != null && b.speedKmph > 0 ? `<span style="font-size: 11px; color: #64748b;">· ${Math.round(b.speedKmph)} km/h</span>` : ""}
+            </div>
+            <div style="margin-top: 8px; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+              <a href="/track/${encodeURIComponent(fleetTarget)}" style="font-size: 12px; color: #1d6b4f; font-weight: 600; text-decoration: underline;">
+                Track this bus live →
+              </a>
+            </div>
           </div>
-          <div style="margin-top: 8px; border-top: 1px solid #e2e8f0; padding-top: 6px;">
-            <a href="/track/${encodeURIComponent(fleetTarget)}" style="font-size: 12px; color: #1d6b4f; font-weight: 600; text-decoration: underline;">
-              Track this bus live →
-            </a>
-          </div>
-        </div>
-      `;
-      marker.bindPopup(popupHtml);
+        `;
+        marker.bindPopup(popupHtml);
 
-      if (onBusClick) {
-        marker.on("click", () => onBusClick(b));
-      }
-    });
+        if (onBusClick) {
+          marker.on("click", () => onBusClick(b));
+        }
+      });
 
-    const token = stops.map((s) => s.name).join("|") + effectivePath.length + activeBuses.map((b) => `${b.label}-${b.latitude}-${b.longitude}`).join(";");
-    if (focusBus && activeBuses.length > 0) {
-      map.setView([activeBuses[0].latitude, activeBuses[0].longitude], 13, { animate: false });
-      fitted.current = `bus:${token}`;
-    } else if (fitted.current !== token) {
-      const bounds: L.LatLngExpression[] = [
-        ...effectivePath.map((p) => [p.latitude, p.longitude] as [number, number]),
-        ...stops.map((s) => [s.latitude, s.longitude] as [number, number]),
-        ...activeBuses.map((b) => [b.latitude, b.longitude] as [number, number]),
-      ];
-      if (bounds.length) {
-        map.fitBounds(bounds as L.LatLngBoundsExpression, { padding: [28, 28], maxZoom: 12 });
-        fitted.current = token;
+      const token = validStops.map((s) => s.name).join("|") + validPath.length + activeBuses.map((b) => `${b.label}-${b.latitude}-${b.longitude}`).join(";");
+      if (focusBus && activeBuses.length > 0) {
+        map.setView([activeBuses[0].latitude, activeBuses[0].longitude], 13, { animate: false });
+        fitted.current = `bus:${token}`;
+      } else if (fitted.current !== token) {
+        const bounds: [number, number][] = [
+          ...validPath.map((p) => [p.latitude, p.longitude] as [number, number]),
+          ...validStops.map((s) => [s.latitude, s.longitude] as [number, number]),
+          ...activeBuses.map((b) => [b.latitude, b.longitude] as [number, number]),
+        ];
+        if (bounds.length > 0) {
+          map.fitBounds(bounds as L.LatLngBoundsExpression, { padding: [28, 28], maxZoom: 12 });
+          fitted.current = token;
+        }
       }
+
+      let alive = true;
+      const timer = window.setTimeout(() => {
+        if (alive) map.invalidateSize();
+      }, 50);
+      return () => {
+        alive = false;
+        window.clearTimeout(timer);
+      };
+    } catch (err) {
+      console.warn("MapView layer render error handled:", err);
     }
-
-    let alive = true;
-    const timer = window.setTimeout(() => {
-      if (alive) map.invalidateSize();
-    }, 50);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [effectivePath, stops, bus, buses, focusBus, onBusClick]);
+  }, [effectivePath, safeStops, bus, buses, focusBus, onBusClick]);
 
   return <div ref={el} className={className ?? "h-full min-h-[320px] w-full"} />;
 }

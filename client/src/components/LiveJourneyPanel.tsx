@@ -137,8 +137,9 @@ export function LiveJourneyPanel({
   const lastBrowserAlertDelayRef = useRef<number | null>(null);
 
   // Stop arrival reminder state
-  const upcomingStops = snapshot.stops.filter((s) => s.status !== "Passed");
-  const [reminderStopId, setReminderStopId] = useState<number>(() => upcomingStops[0]?.stopId ?? snapshot.stops[0]?.stopId ?? 0);
+  const stops = snapshot?.stops ?? [];
+  const upcomingStops = stops.filter((s) => s.status !== "Passed");
+  const [reminderStopId, setReminderStopId] = useState<number>(() => upcomingStops[0]?.stopId ?? stops[0]?.stopId ?? 0);
   const [reminderMinutes, setReminderMinutes] = useState(10);
   const [reminderArmed, setReminderArmed] = useState(false);
   const [reminderFeedback, setReminderFeedback] = useState("");
@@ -148,17 +149,12 @@ export function LiveJourneyPanel({
   // Quick report & verified community updates state
   const [communityOpen, setCommunityOpen] = useState(false);
   const [dialogTab, setDialogTab] = useState<"verified" | "delay">("verified");
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportCategory, setReportCategory] = useState("DelayReport");
-  const [reportStopName, setReportStopName] = useState("");
-  const [reportDesc, setReportDesc] = useState("");
-  const [reportSaving, setReportSaving] = useState(false);
-  const [reportFeedback, setReportFeedback] = useState("");
 
   const communityQuery = useQuery<CommunityUpdateItem[]>(
-    snapshot.fleetNumber ? `/api/community-updates?fleetNumber=${encodeURIComponent(snapshot.fleetNumber)}` : null,
+    snapshot?.fleetNumber ? `/api/community-updates?fleetNumber=${encodeURIComponent(snapshot.fleetNumber)}` : null,
   );
 
+  const lastStop = stops.length > 0 ? stops[stops.length - 1] : undefined;
   const shareTarget: ShareTarget = {
     fleetNumber: snapshot.fleetNumber,
     routeId: snapshot.routeId,
@@ -169,12 +165,12 @@ export function LiveJourneyPanel({
     currentLocation: snapshot.currentStop,
     nextStop: snapshot.nextStop,
     etaMinutes: snapshot.etaToYouMinutes ?? snapshot.etaMinutes,
-    estimatedArrivalTime: snapshot.estimatedArrivalTime ?? snapshot.stops.at(-1)?.estimatedArrival ?? null,
+    estimatedArrivalTime: snapshot.estimatedArrivalTime ?? lastStop?.estimatedArrival ?? null,
     delayMinutes: snapshot.delayMinutes,
     speedKmph: snapshot.speedKmph,
     recordedAt: snapshot.recordedAt,
-    fromStop: from || snapshot.fromStop || snapshot.stops[0]?.name,
-    toStop: to || snapshot.toStop || snapshot.stops.at(-1)?.name,
+    fromStop: from || snapshot.fromStop || stops[0]?.name,
+    toStop: to || snapshot.toStop || lastStop?.name,
     serviceDate: date || snapshot.serviceDate,
   };
 

@@ -77,7 +77,7 @@ export function TrackPage() {
     }
   }, [fleet, live]);
 
-  const effectiveLive = live ?? cachedSnapshot;
+  const effectiveLive = live ?? seed ?? cachedSnapshot;
 
   if (query.loading && !effectiveLive) {
     return <p className="px-4 py-10 text-muted-foreground">Opening the live map…</p>;
@@ -92,14 +92,15 @@ export function TrackPage() {
     );
   }
 
-  const findStop = (name: string) => effectiveLive.stops.find(
+  const stops = effectiveLive.stops ?? [];
+  const findStop = (name: string) => stops.find(
     (stop) => stop.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase(),
   );
-  const fromStop = from ? findStop(from) : effectiveLive.stops[0];
-  const toStop = to ? findStop(to) : effectiveLive.stops.at(-1);
+  const fromStop = from ? findStop(from) : stops[0];
+  const toStop = to ? findStop(to) : (stops.length > 0 ? stops[stops.length - 1] : undefined);
   const invalidFrom = !!from && !fromStop;
   const invalidTo = !!to && !toStop;
-  const invalidOrder = !!fromStop && !!toStop && fromStop.sequence >= toStop.sequence;
+  const invalidOrder = hasJourney && !!fromStop && !!toStop && fromStop.sequence >= toStop.sequence;
 
   if (invalidFrom || invalidTo || invalidOrder) {
     const message = invalidFrom || invalidTo
@@ -109,10 +110,10 @@ export function TrackPage() {
       <div className="mx-auto max-w-3xl px-4 py-10">
         <p>{message}</p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Stops on this service: {effectiveLive.stops.map((stop) => stop.name).join(" → ")}
+          Stops on this service: {stops.map((stop) => stop.name).join(" → ")}
         </p>
         <Button className="mt-3" variant="outline" asChild>
-          <Link to={`/search?from=${encodeURIComponent(effectiveLive.stops[0]?.name ?? "")}&to=${encodeURIComponent(effectiveLive.stops.at(-1)?.name ?? "")}`}>
+          <Link to={`/search?from=${encodeURIComponent(stops[0]?.name ?? "")}&to=${encodeURIComponent(stops[stops.length - 1]?.name ?? "")}`}>
             Search this route
           </Link>
         </Button>
@@ -193,9 +194,9 @@ export function TrackPage() {
           {/* Fallback Planned Route Card when live tracking is unavailable or non-live */}
           {trackingStatus !== "live" && (
             <ScheduledRouteCard
-              origin={from || effectiveLive.stops[0]?.name}
-              destination={to || effectiveLive.stops.at(-1)?.name}
-              stops={effectiveLive.stops}
+              origin={from || stops[0]?.name}
+              destination={to || stops[stops.length - 1]?.name}
+              stops={stops}
               status={trackingStatus}
             />
           )}
@@ -262,7 +263,7 @@ export function TrackPage() {
 
           <div className="rounded-2xl bg-paper px-4 py-3">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">
-              {reachesYou ? `Until it reaches ${from || "you"}` : `Until ${to || effectiveLive.stops.at(-1)?.name || "the last stop"}`}
+              {reachesYou ? `Until it reaches ${from || "you"}` : `Until ${to || stops[stops.length - 1]?.name || "the last stop"}`}
             </p>
             <p className="font-display text-5xl leading-none">
               {reachesYou ? formatEta(effectiveLive.etaToYouMinutes) : formatEta(effectiveLive.etaToDestinationMinutes)}

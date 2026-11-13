@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Shell } from "@/components/Shell";
 import { useAuth } from "@/lib/auth";
 
@@ -69,7 +70,7 @@ export default function App() {
           <Route path="reports" element={<ReportsPage />} />
           <Route path="workflows" element={<WorkflowsPage />} />
         </Route>
-        <Route element={<Shell><Outlet /></Shell>}>
+        <Route element={<Shell><ErrorBoundary><Outlet /></ErrorBoundary></Shell>}>
           <Route index element={<HomePage />} />
           <Route path="assistant" element={<AiAssistantPage />} />
           <Route path="ai-assistant" element={<AiAssistantPage />} />

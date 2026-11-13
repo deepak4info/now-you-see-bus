@@ -200,21 +200,22 @@ export function TrackingNotice({
 export function ScheduledRouteCard({
   origin,
   destination,
-  stops,
+  stops = [],
   status,
   className = "",
 }: {
   origin?: string;
   destination?: string;
-  stops: { name: string; sequence?: number }[];
+  stops?: { name: string; sequence?: number }[];
   status: TrackingStatus;
   className?: string;
 }) {
   if (status === "live") return null;
 
-  const startName = origin || stops[0]?.name || "Depot";
-  const endName = destination || stops.at(-1)?.name || "Terminus";
-  const stopChain = stops.map((s) => s.name).join(" → ");
+  const safeStops = stops ?? [];
+  const startName = origin || safeStops[0]?.name || "Depot";
+  const endName = destination || (safeStops.length > 0 ? safeStops[safeStops.length - 1]?.name : undefined) || "Terminus";
+  const stopChain = safeStops.map((s) => s.name).join(" → ");
 
   return (
     <div className={`rounded-2xl border border-amber-300/80 bg-amber-50/90 p-4 text-amber-950 shadow-sm dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 ${className}`}>

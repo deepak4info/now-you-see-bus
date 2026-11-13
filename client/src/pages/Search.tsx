@@ -244,8 +244,9 @@ function ServiceCard({ bus, number, from, to, date }: {
     ? bus.stops.slice(firstIndex, lastIndex + 1)
     : bus.stops;
   const boardingTime = journeyStops[0]?.scheduledTime || bus.departureTime;
-  const distance = journeyStops.at(-1) && journeyStops[0]
-    ? Math.max(0, journeyStops.at(-1)!.distanceKm - journeyStops[0].distanceKm)
+  const lastJourneyStop = journeyStops.length > 0 ? journeyStops[journeyStops.length - 1] : undefined;
+  const distance = lastJourneyStop && journeyStops[0]
+    ? Math.max(0, (lastJourneyStop.distanceKm ?? 0) - (journeyStops[0].distanceKm ?? 0))
     : null;
 
   return (

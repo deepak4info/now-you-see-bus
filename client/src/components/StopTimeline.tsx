@@ -3,16 +3,17 @@ import type { StopOnTrip } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function StopTimeline({
-  stops,
+  stops = [],
   serviceDate,
   boardingStop,
   showTitle = true,
 }: {
-  stops: StopOnTrip[];
+  stops?: StopOnTrip[];
   serviceDate?: string;
   boardingStop?: string;
   showTitle?: boolean;
 }) {
+  const safeStops = stops ?? [];
   let previousMinute = -1;
   let dayOffset = 0;
 
@@ -21,19 +22,19 @@ export function StopTimeline({
       {showTitle && (
         <div className="flex items-center justify-between border-b pb-2">
           <h3 className="text-base font-semibold text-ink">Upcoming station arrival times</h3>
-          <span className="text-xs text-muted-foreground">{stops.length} stations</span>
+          <span className="text-xs text-muted-foreground">{safeStops.length} stations</span>
         </div>
       )}
 
       <ol className="relative">
-        {stops.map((stop, index) => {
-          const last = index === stops.length - 1;
+        {safeStops.map((stop, index) => {
+          const last = index === safeStops.length - 1;
           const [hour, minute] = (stop.scheduledTime || "00:00").split(":").map(Number);
           const scheduledMinute = (Number.isNaN(hour) ? 0 : hour) * 60 + (Number.isNaN(minute) ? 0 : minute);
           if (previousMinute >= 0 && scheduledMinute < previousMinute) dayOffset += 1;
           previousMinute = scheduledMinute;
           const stopDate = serviceDate ? dateForStop(serviceDate, dayOffset) : null;
-          const isBoardingStop = boardingStop?.toLocaleLowerCase() === stop.name.toLocaleLowerCase();
+          const isBoardingStop = boardingStop ? boardingStop.trim().toLocaleLowerCase() === stop.name.trim().toLocaleLowerCase() : false;
 
           // Determine status category
           const isDeparted = stop.displayStatus === "Departed" || stop.status === "Passed";
@@ -130,7 +131,7 @@ export function StopTimeline({
                     )}
                   </div>
                   <div className="text-[11px]">
-                    {stop.distanceKm.toFixed(0)} km
+                    {(stop.distanceKm != null ? stop.distanceKm : 0).toFixed(0)} km
                     {stop.etaMinutes != null && stop.etaMinutes > 0 && !isDeparted && !isArrived && ` · in ${formatEta(stop.etaMinutes)}`}
                   </div>
                 </div>

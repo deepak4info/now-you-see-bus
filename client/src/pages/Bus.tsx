@@ -82,7 +82,7 @@ export function BusPage() {
     }
   }, [fleet, live]);
 
-  const effectiveLive = live ?? cachedSnapshot;
+  const effectiveLive = live ?? seed ?? cachedSnapshot;
 
   if (query.loading && !effectiveLive) return <p className="mx-auto max-w-6xl px-4 py-10 text-muted-foreground">Loading bus {fleet}…</p>;
   if (!effectiveLive) {
@@ -96,16 +96,17 @@ export function BusPage() {
     );
   }
 
-  const effectiveFrom = from || effectiveLive.stops[0]?.name || "";
-  const effectiveTo = to || effectiveLive.stops.at(-1)?.name || "";
-  const findStop = (name: string) => effectiveLive.stops.find(
+  const stops = effectiveLive.stops ?? [];
+  const effectiveFrom = from || stops[0]?.name || "";
+  const effectiveTo = to || (stops.length > 0 ? stops[stops.length - 1]?.name : "") || "";
+  const findStop = (name: string) => stops.find(
     (stop) => stop.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase(),
   ) ?? null;
   const selectedFromStop = findStop(effectiveFrom);
   const selectedToStop = findStop(effectiveTo);
   const invalidFromStop = !!from && !selectedFromStop;
   const invalidToStop = !!to && !selectedToStop;
-  const invalidStopOrder = !!selectedFromStop && !!selectedToStop && selectedFromStop.sequence >= selectedToStop.sequence;
+  const invalidStopOrder = hasJourney && !!selectedFromStop && !!selectedToStop && selectedFromStop.sequence >= selectedToStop.sequence;
 
   async function save() {
     if (!effectiveLive) return;
@@ -123,8 +124,8 @@ export function BusPage() {
         body: JSON.stringify({
           busId: effectiveLive.busId,
           routeId: effectiveLive.routeId,
-          fromStopId: selectedFromStop?.stopId ?? effectiveLive.stops[0]?.stopId ?? null,
-          toStopId: selectedToStop?.stopId ?? effectiveLive.stops.at(-1)?.stopId ?? null,
+          fromStopId: selectedFromStop?.stopId ?? stops[0]?.stopId ?? null,
+          toStopId: selectedToStop?.stopId ?? (stops.length > 0 ? stops[stops.length - 1]?.stopId : null) ?? null,
           label: `${effectiveFrom} → ${effectiveTo} · Bus ${effectiveLive.fleetNumber}`,
         }),
       });
@@ -142,8 +143,8 @@ export function BusPage() {
         <p>{invalidFromStop || invalidToStop
           ? `This route does not include ${invalidFromStop ? `"${from}"` : ""}${invalidFromStop && invalidToStop ? " or " : ""}${invalidToStop ? `"${to}"` : ""}.`
           : `${selectedFromStop?.name} must come before ${selectedToStop?.name} on this route.`}</p>
-        <p className="mt-2 text-sm text-muted-foreground">Use stops that belong to this service: {effectiveLive.stops.map((stop) => stop.name).join(" → ")}</p>
-        <Button className="mt-3" variant="outline" asChild><Link to={`/search?from=${encodeURIComponent(effectiveLive.stops[0]?.name ?? "")}&to=${encodeURIComponent(effectiveLive.stops.at(-1)?.name ?? "")}`}>Search this route</Link></Button>
+        <p className="mt-2 text-sm text-muted-foreground">Use stops that belong to this service: {stops.map((stop) => stop.name).join(" → ")}</p>
+        <Button className="mt-3" variant="outline" asChild><Link to={`/search?from=${encodeURIComponent(stops[0]?.name ?? "")}&to=${encodeURIComponent(stops[stops.length - 1]?.name ?? "")}`}>Search this route</Link></Button>
       </div>
     );
   }
@@ -200,8 +201,8 @@ export function BusPage() {
     return null;
   })();
 
-  const routeDistance = effectiveLive.stops.at(-1)?.distanceKm ?? 0;
-  const routeDuration = getRouteDurationMinutes(effectiveLive.stops);
+  const routeDistance = (stops.length > 0 ? stops[stops.length - 1]?.distanceKm : 0) ?? 0;
+  const routeDuration = getRouteDurationMinutes(stops);
   const selectedBoardingStop = stopOptions.data?.find(
     (stop) => stop.name.toLocaleLowerCase() === from.toLocaleLowerCase(),
   );
@@ -225,9 +226,9 @@ export function BusPage() {
           {/* Fallback Planned Route Card when live tracking is unavailable or non-live */}
           {trackingStatus !== "live" && (
             <ScheduledRouteCard
-              origin={from || effectiveLive.stops[0]?.name}
-              destination={to || effectiveLive.stops.at(-1)?.name}
-              stops={effectiveLive.stops}
+              origin={from || stops[0]?.name}
+              destination={to || (stops.length > 0 ? stops[stops.length - 1]?.name : undefined)}
+              stops={stops}
               status={trackingStatus}
             />
           )}
@@ -389,14 +390,15 @@ export function BusPage() {
   );
 }
 
-function getRouteDurationMinutes(stops: TrackSnapshot["stops"]) {
-  if (stops.length < 2) return null;
+function getRouteDurationMinutes(stops?: TrackSnapshot["stops"]) {
+  if (!stops || stops.length < 2) return null;
   const toMinutes = (time: string) => {
-    const [hours, minutes] = time.split(":").map(Number);
-    return hours * 60 + minutes;
+    const [hours, minutes] = (time || "00:00").split(":").map(Number);
+    return (Number.isNaN(hours) ? 0 : hours) * 60 + (Number.isNaN(minutes) ? 0 : minutes);
   };
   const first = toMinutes(stops[0].scheduledTime);
-  let last = toMinutes(stops.at(-1)!.scheduledTime);
+  const lastStop = stops[stops.length - 1];
+  let last = toMinutes(lastStop?.scheduledTime ?? "");
   if (last < first) last += 24 * 60;
   return last - first;
 }
