@@ -3,6 +3,10 @@ using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 using BusTrack.Api;
+using BusTrack.Api.Application.AI.Functions;
+using BusTrack.Api.Application.AI.Infrastructure;
+using BusTrack.Api.Application.AI.Interfaces;
+using BusTrack.Api.Application.AI.Services;
 using BusTrack.Api.Auth;
 using BusTrack.Api.Data;
 using BusTrack.Api.Hubs;
@@ -71,6 +75,18 @@ builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<TripSimulator>();
 builder.Services.AddHostedService<TripArchiveHostedService>();
+builder.Services.AddHttpClient<OpenAiClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<SearchBusesFunction>();
+builder.Services.AddScoped<PlanJourneyFunction>();
+builder.Services.AddScoped<GetLiveStatusFunction>();
+builder.Services.AddScoped<GetTimetableFunction>();
+builder.Services.AddScoped<GetRouteFunction>();
+builder.Services.AddScoped<GetAdminAnalyticsFunction>();
+builder.Services.AddScoped<IAiAssistantService, AiAssistantService>();
+
 builder.Services.AddSignalR();
 builder.Services.AddControllers();
 

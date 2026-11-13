@@ -17,6 +17,7 @@ const FavoritesPage = lazy(() => import("@/pages/Favorites").then(m => ({ defaul
 const NotificationsPage = lazy(() => import("@/pages/Notifications").then(m => ({ default: m.NotificationsPage })));
 const DriverPage = lazy(() => import("@/pages/Driver").then(m => ({ default: m.DriverPage })));
 const StopTimetablePage = lazy(() => import("@/pages/StopTimetable").then(m => ({ default: m.StopTimetablePage })));
+const AiAssistantPage = lazy(() => import("@/pages/AiAssistantPage").then(m => ({ default: m.AiAssistantPage })));
 
 // Admin Management Suite (Code-Split into separate isolated chunk)
 const AdminShell = lazy(() => import("@/pages/admin/AdminShell").then(m => ({ default: m.AdminShell })));
@@ -70,6 +71,8 @@ export default function App() {
         </Route>
         <Route element={<Shell><Outlet /></Shell>}>
           <Route index element={<HomePage />} />
+          <Route path="assistant" element={<AiAssistantPage />} />
+          <Route path="ai-assistant" element={<AiAssistantPage />} />
           <Route path="routes" element={<LiveRoutesPage />} />
           <Route path="enquiry-numbers" element={<EnquiryNumbersPage />} />
           <Route path="search" element={<SearchPage />} />

@@ -8,6 +8,7 @@ const translations = {
   en: {
     brand: "Where is my bus",
     navFindBus: "Find a bus",
+    navAiAssistant: "AI Assistant ✨",
     navLiveRoutes: "Live routes",
     navEnquiry: "Bus stand numbers",
     navFavorites: "Favourites",
@@ -50,6 +51,7 @@ const translations = {
   hi: {
     brand: "मेरी बस कहाँ है",
     navFindBus: "बस खोजें",
+    navAiAssistant: "AI सहायक ✨",
     navLiveRoutes: "लाइव रूट",
     navEnquiry: "बस स्टैंड नंबर",
     navFavorites: "पसंदीदा",

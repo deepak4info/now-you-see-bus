@@ -316,3 +316,127 @@ export type StopTimetableResponse = {
   routes: StopRouteSummary[];
 };
 
+// AI Bus Assistant Types
+export type AiChatMessage = {
+  id?: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt?: string;
+};
+
+export type AiBusCard = {
+  fleetNumber: string;
+  registrationNumber: string;
+  busName: string;
+  operatorName: string;
+  busType: string;
+  routeId: number;
+  routeName: string;
+  fromStop: string;
+  toStop: string;
+  departureTime: string;
+  arrivalTime: string;
+  durationMinutes: number;
+  estimatedFare: number;
+  isLive: boolean;
+  delayMinutes?: number | null;
+  delayStatus?: string | null;
+  nextStop?: string | null;
+  etaMinutes?: number | null;
+  tripId?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+};
+
+export type AiLiveStatus = {
+  fleetNumber: string;
+  registrationNumber: string;
+  busName: string;
+  routeName: string;
+  originStop: string;
+  destinationStop: string;
+  currentLocation?: string | null;
+  nextStop?: string | null;
+  etaMinutes?: number | null;
+  departureTime: string;
+  speedKmph?: number | null;
+  delayMinutes?: number | null;
+  delayStatus: string;
+  recordedAt?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  tripId?: number | null;
+  routeId: number;
+};
+
+export type AiAdminSummary = {
+  totalBuses: number;
+  activeBuses: number;
+  totalRoutes: number;
+  activeRoutes: number;
+  totalSchedules: number;
+  routesWithoutSchedules: string[];
+  inactiveBuses: string[];
+  delayedBusesCount: number;
+  totalTripsToday: number;
+  activeTripsNow: number;
+  summary: string;
+};
+
+export type JourneyLeg = {
+  routeId: number;
+  routeCode: string;
+  routeName: string;
+  scheduleId?: number | null;
+  tripId?: number | null;
+  fleetNumber?: string | null;
+  busType?: string | null;
+  operatorName?: string | null;
+  fromStop: string;
+  toStop: string;
+  departureTime: string;
+  arrivalTime: string;
+  durationMinutes: number;
+  estimatedFare: number;
+  distanceKm: number;
+  status: string;
+};
+
+export type JourneyOption = {
+  optionId: string;
+  isDirect: boolean;
+  transfersCount: number;
+  transferStops: string[];
+  departureTime: string;
+  arrivalTime: string;
+  totalJourneyMinutes: number;
+  totalWaitMinutes: number;
+  estimatedTotalFare: number;
+  legs: JourneyLeg[];
+};
+
+export type MultiRoutePlan = {
+  from: string;
+  to: string;
+  date: string;
+  directAvailable: boolean;
+  directOptions: JourneyOption[];
+  transferOptions: JourneyOption[];
+  allOptions: JourneyOption[];
+};
+
+export type AiChatResponse = {
+  reply: string;
+  language: "hi" | "en";
+  intent: string;
+  functionCalled?: string | null;
+  buses?: AiBusCard[] | null;
+  journeyPlan?: MultiRoutePlan | null;
+  liveStatus?: AiLiveStatus | null;
+  timetable?: StopTimetableResponse | null;
+  adminSummary?: AiAdminSummary | null;
+  quickReplies?: string[] | null;
+  success?: boolean;
+  errorMessage?: string | null;
+};
+

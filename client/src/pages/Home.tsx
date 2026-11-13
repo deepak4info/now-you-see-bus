@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeftRight, ArrowRight, BusFront, CalendarDays, ChevronDown, CircleCheck, MapPin, Navigation, Phone, Route as RouteIcon, Search, X, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, ArrowRight, Bot, BusFront, CalendarDays, ChevronDown, CircleCheck, MapPin, Navigation, Phone, Route as RouteIcon, Search, Sparkles, X, type LucideIcon } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { MapView, type BusPin } from "@/components/MapView";
@@ -248,6 +248,13 @@ export function HomePage() {
             className="ml-4 inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Phone aria-hidden="true" className="h-4 w-4" /> Bus stand numbers
+          </Link>
+          <Link
+            to="/assistant"
+            className="ml-4 inline-flex items-center gap-1.5 rounded-full bg-pine/10 hover:bg-pine/20 px-3 py-1 text-xs font-semibold text-pine border border-pine/20 transition-all hover:scale-105"
+          >
+            <Bot className="h-3.5 w-3.5" />
+            AI Travel Assistant ✨
           </Link>
         </section>
 
