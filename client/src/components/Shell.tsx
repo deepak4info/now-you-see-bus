@@ -1,9 +1,8 @@
 import { Link, NavLink } from "react-router-dom";
 import { useEffect, useState, type ReactNode } from "react";
-import { Globe, Menu, MessageSquare, UsersRound, X } from "lucide-react";
+import { Globe, Menu, UsersRound, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { CommunityUpdatesDialog } from "@/components/CommunityUpdatesDialog";
 import { api } from "@/lib/api";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -16,14 +15,12 @@ const links: { to: string; key: TranslationKey; end?: boolean }[] = [
   { to: "/routes", key: "navLiveRoutes" },
   { to: "/enquiry-numbers", key: "navEnquiry" },
   { to: "/favorites", key: "navFavorites" },
-  { to: "/notifications", key: "navAlerts" },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const { t, toggleLang } = useI18n();
   const [open, setOpen] = useState(false);
-  const [communityOpen, setCommunityOpen] = useState(false);
   const [visitorCount, setVisitorCount] = useState<number | null>(null);
   const [visitorError, setVisitorError] = useState("");
 
@@ -66,14 +63,6 @@ export function Shell({ children }: { children: ReactNode }) {
                 {t(link.key)}
               </NavLink>
             ))}
-            <button
-              type="button"
-              onClick={() => setCommunityOpen(true)}
-              className="flex items-center gap-1 rounded-md px-3 py-2 text-sm text-muted-foreground hover:text-ink cursor-pointer"
-            >
-              <MessageSquare className="h-3.5 w-3.5 text-pine" aria-hidden="true" />
-              {t("navCommunity")}
-            </button>
           </nav>
           <div className="ml-auto hidden items-center gap-2 md:flex">
             <Button variant="outline" size="sm" onClick={toggleLang} title="Switch English / हिन्दी" className="h-8 gap-1.5 text-xs">
@@ -120,14 +109,6 @@ export function Shell({ children }: { children: ReactNode }) {
                 {t(link.key)}
               </Link>
             ))}
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-pine font-medium"
-              onClick={() => { setOpen(false); setCommunityOpen(true); }}
-            >
-              <MessageSquare className="h-4 w-4" />
-              {t("navCommunity")}
-            </button>
             {user?.role === "Driver" && (
               <Link to="/driver" className="block rounded-md px-2 py-2 font-medium text-pine" onClick={() => setOpen(false)}>
                 {t("driverConsole")}
@@ -168,7 +149,6 @@ export function Shell({ children }: { children: ReactNode }) {
           <p className="w-full text-xs text-muted-foreground sm:w-auto">{t("visitorsHint")}</p>
         </div>
       </footer>
-      <CommunityUpdatesDialog isOpen={communityOpen} onClose={() => setCommunityOpen(false)} />
     </div>
   );
 }
