@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, AlertTriangle, CalendarX, Check, Clock, GitPullRequest, Info, MessageSquare, Plus, RefreshCw, Send, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api, useQuery } from "@/lib/api";
@@ -74,8 +75,35 @@ export function CommunityUpdatesDialog({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4 backdrop-blur-xs" role="dialog" aria-modal="true" aria-label="Community Bus Updates">
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const dialogContent = (
+    <div
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/60 p-3 sm:p-4 backdrop-blur-xs"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Community Bus Updates"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-5 py-4">
@@ -511,4 +539,6 @@ export function CommunityUpdatesDialog({
       </div>
     </div>
   );
+
+  return typeof document !== "undefined" ? createPortal(dialogContent, document.body) : null;
 }
