@@ -16,7 +16,6 @@ const links: { to: string; key: TranslationKey; end?: boolean }[] = [
   { to: "/assistant", key: "navAiAssistant" },
   { to: "/routes", key: "navLiveRoutes" },
   { to: "/enquiry-numbers", key: "navEnquiry" },
-  { to: "/favorites", key: "navFavorites" },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
