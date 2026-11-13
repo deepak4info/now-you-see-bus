@@ -65,7 +65,14 @@ export function AiAssistantPage() {
       adminSummary?: any;
       quickReplies?: string[];
     })[]
-  >([]);
+  >(() => [
+    {
+      role: "assistant",
+      content:
+        "नमस्ते! 😊 मैं आपका **AI बस यात्रा सहायक** हूँ।\n\nआप मुझसे हरियाणा रोडवेज व क्षेत्रीय बसों के रूट, समय, लाइव लोकेशन या कनेक्टिंग बसों के बारे में हिंदी या अंग्रेजी में पूछ सकते हैं। आप टाइप कर सकते हैं या माइक दबाकर बोल सकते हैं!",
+      quickReplies: DEFAULT_SUGGESTIONS_HI.slice(0, 4),
+    },
+  ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -82,73 +89,98 @@ export function AiAssistantPage() {
   }, [messages]);
 
   useEffect(() => {
-    const win = window as IWindowSpeechRecognition;
-    const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      setSpeechSupported(true);
+    try {
+      if (typeof window !== "undefined") {
+        const win = window as IWindowSpeechRecognition;
+        const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          setSpeechSupported(true);
+        }
+      }
+    } catch {
+      setSpeechSupported(false);
+    }
+
+    return () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (messagesEndRef.current && typeof messagesEndRef.current.scrollIntoView === "function") {
+        messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+      }
+    } catch {}
+  }, [messages, loading]);
+
+  const handleToggleLang = () => {
+    const nextLang = lang === "hi" ? "en" : "hi";
+    setLang(nextLang);
+    if (messages.length <= 1) {
+      setMessages([
+        {
+          role: "assistant",
+          content:
+            nextLang === "hi"
+              ? "नमस्ते! 😊 मैं आपका **AI बस यात्रा सहायक** हूँ।\n\nआप मुझसे हरियाणा रोडवेज व क्षेत्रीय बसों के रूट, समय, लाइव लोकेशन या कनेक्टिंग बसों के बारे में हिंदी या अंग्रेजी में पूछ सकते हैं। आप टाइप कर सकते हैं या माइक दबाकर बोल सकते हैं!"
+              : "Hello! 👋 I am your **AI Bus Travel Assistant**.\n\nAsk me about bus timings, routes, live GPS tracking, connecting buses, or station timetables in English or Hindi. Type your question or use the microphone to speak!",
+          quickReplies: nextLang === "hi" ? DEFAULT_SUGGESTIONS_HI.slice(0, 4) : DEFAULT_SUGGESTIONS_EN.slice(0, 4),
+        },
+      ]);
+    }
+  };
+
+  const toggleListening = () => {
+    try {
+      const win = typeof window !== "undefined" ? (window as IWindowSpeechRecognition) : ({} as any);
+      const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert(lang === "hi" ? "आपके ब्राउज़र में वॉइस इनपुट समर्थित नहीं है।" : "Voice input is not supported in this browser.");
+        return;
+      }
+
+      if (isListening) {
+        try {
+          recognitionRef.current?.stop();
+        } catch {}
+        setIsListening(false);
+        return;
+      }
+
       const rec = new SpeechRecognition();
       rec.continuous = false;
       rec.interimResults = true;
+      rec.lang = lang === "hi" ? "hi-IN" : "en-IN";
 
       rec.onstart = () => setIsListening(true);
       rec.onend = () => setIsListening(false);
       rec.onerror = () => setIsListening(false);
 
       rec.onresult = (e: any) => {
-        const transcript = Array.from(e.results)
-          .map((r: any) => r[0].transcript)
-          .join("");
-        setInput(transcript);
-        if (e.results[0].isFinal && transcript.trim().length > 2) {
-          handleSend(transcript);
-        }
+        try {
+          const transcript = Array.from(e.results)
+            .map((r: any) => r[0].transcript)
+            .join("");
+          setInput(transcript);
+          if (e.results[0]?.isFinal && transcript.trim().length > 2) {
+            void handleSend(transcript);
+          }
+        } catch {}
       };
 
       recognitionRef.current = rec;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.lang = lang === "hi" ? "hi-IN" : "en-IN";
-    }
-  }, [lang]);
-
-  useEffect(() => {
-    if (messages.length === 0) {
-      setMessages([
-        {
-          role: "assistant",
-          content:
-            lang === "hi"
-              ? "नमस्ते! 😊 मैं आपका **AI बस यात्रा सहायक** हूँ।\n\nआप मुझसे हरियाणा रोडवेज व क्षेत्रीय बसों के रूट, समय, लाइव लोकेशन या कनेक्टिंग बसों के बारे में हिंदी या अंग्रेजी में पूछ सकते हैं। आप टाइप कर सकते हैं या माइक दबाकर बोल सकते हैं!"
-              : "Hello! 👋 I am your **AI Bus Travel Assistant**.\n\nAsk me about bus timings, routes, live GPS tracking, connecting buses, or station timetables in English or Hindi. Type your question or use the microphone to speak!",
-          quickReplies: lang === "hi" ? DEFAULT_SUGGESTIONS_HI.slice(0, 4) : DEFAULT_SUGGESTIONS_EN.slice(0, 4),
-        },
-      ]);
-    }
-  }, [lang]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
-
-  const toggleListening = () => {
-    if (!speechSupported) {
-      alert(lang === "hi" ? "आपके ब्राउज़र में वॉइस इनपुट समर्थित नहीं है।" : "Voice input is not supported in this browser.");
-      return;
-    }
-
-    if (isListening) {
-      recognitionRef.current?.stop();
+      rec.start();
+    } catch (err) {
+      console.warn("Speech recognition error:", err);
       setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current?.start();
-      } catch {
-        recognitionRef.current?.stop();
-        setTimeout(() => recognitionRef.current?.start(), 100);
-      }
     }
   };
 
@@ -286,7 +318,7 @@ export function AiAssistantPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setLang((prev) => (prev === "hi" ? "en" : "hi"))}
+              onClick={handleToggleLang}
               className="gap-1.5 text-xs rounded-full"
             >
               <Globe className="h-3.5 w-3.5 text-pine" />
@@ -480,7 +512,7 @@ export function AiAssistantPage() {
 
 function PageBusCard({ bus }: { bus: AiBusCard }) {
   const navigate = useNavigate();
-  const trackUrl = `/bus/${encodeURIComponent(bus.fleetNumber)}?from=${encodeURIComponent(bus.fromStop)}&to=${encodeURIComponent(bus.toStop)}&routeId=${bus.routeId}`;
+  const trackUrl = `/bus/${encodeURIComponent(bus.fleetNumber || "")}?from=${encodeURIComponent(bus.fromStop || "")}&to=${encodeURIComponent(bus.toStop || "")}&routeId=${bus.routeId || ""}`;
 
   return (
     <div className="rounded-xl border border-border bg-card p-3 shadow-sm hover:border-pine/40 transition-all">
@@ -536,3 +568,5 @@ function PageBusCard({ bus }: { bus: AiBusCard }) {
     </div>
   );
 }
+
+export default AiAssistantPage;
