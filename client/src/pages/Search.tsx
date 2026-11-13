@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowLeft, ArrowRight, BusFront, CalendarDays, MapPin, Share2, Star } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
-import { JourneyPlannerCard } from "@/components/JourneyPlannerCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { api, useQuery } from "@/lib/api";
@@ -180,12 +179,7 @@ export function SearchPage() {
           </div>
         </div>
       )}
-      {query.data?.journeyPlan && query.data.journeyPlan.allOptions.length > 0 && (
-        <div className="mt-6">
-          <JourneyPlannerCard plan={query.data.journeyPlan} date={query.data.date} />
-        </div>
-      )}
-      {query.data && query.data.results.length === 0 && (!query.data.journeyPlan || query.data.journeyPlan.allOptions.length === 0) && (
+      {query.data && query.data.results.length === 0 && (
         <div className="mt-8 rounded-2xl border bg-card p-6 sm:p-8">
           <div className="mx-auto max-w-lg text-center">
             <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-muted text-muted-foreground"><BusFront size={22} aria-hidden="true" /></span>

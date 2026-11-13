@@ -69,7 +69,6 @@ public class PassengerController : ControllerBase
 
         var day = date ?? IndiaClock.Today();
         var search = await _tracking.SearchRouteAsync(origin.Name, dest.Name, day, ct: ct);
-        var plan = await _tracking.PlanJourneyAsync(origin.Name, dest.Name, day, ct: ct);
         return Ok(new
         {
             from = search.From,
@@ -77,27 +76,8 @@ public class PassengerController : ControllerBase
             date = search.EffectiveDate.ToString("yyyy-MM-dd"),
             requestedDate = search.RequestedDate.ToString("yyyy-MM-dd"),
             showingNextDate = search.ShowingNextDate,
-            results = search.Results,
-            journeyPlan = plan
+            results = search.Results
         });
-    }
-
-    [HttpGet("journey-planner")]
-    public async Task<IActionResult> JourneyPlanner([FromQuery] string from, [FromQuery] string to, [FromQuery] DateOnly? date, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
-            return BadRequest(new { message = "Choose where you are leaving from and where you are going." });
-        if (from.Trim().Equals(to.Trim(), StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { message = "Pick two different stops." });
-
-        var origin = await _tracking.FindStop(from, ct);
-        var dest = await _tracking.FindStop(to, ct);
-        if (origin is null) return BadRequest(new { message = $"No stop matches \"{from.Trim()}\"." });
-        if (dest is null) return BadRequest(new { message = $"No stop matches \"{to.Trim()}\"." });
-
-        var day = date ?? IndiaClock.Today();
-        var plan = await _tracking.PlanJourneyAsync(origin.Name, dest.Name, day, ct: ct);
-        return Ok(plan);
     }
 
     [HttpGet("track/{fleet}")]

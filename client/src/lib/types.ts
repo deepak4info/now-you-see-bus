@@ -85,50 +85,6 @@ export type TrackSnapshot = {
   path: { latitude: number; longitude: number }[];
 };
 
-export type JourneyLeg = {
-  routeId: number;
-  routeCode: string;
-  routeName: string;
-  scheduleId: number | null;
-  tripId: number | null;
-  fleetNumber: string | null;
-  busType: string | null;
-  operatorName: string | null;
-  fromStop: string;
-  toStop: string;
-  departureTime: string;
-  arrivalTime: string;
-  durationMinutes: number;
-  estimatedFare: number;
-  distanceKm: number;
-  status: string;
-};
-
-export type JourneyOption = {
-  optionId: string;
-  isDirect: boolean;
-  transfersCount: number;
-  transferStops: string[];
-  departureTime: string;
-  arrivalTime: string;
-  totalJourneyMinutes: number;
-  totalWaitMinutes: number;
-  estimatedTotalFare: number;
-  totalDistanceKm: number;
-  legs: JourneyLeg[];
-  summary: string;
-};
-
-export type MultiRoutePlan = {
-  from: string;
-  to: string;
-  date: string;
-  directAvailable: boolean;
-  directOptions: JourneyOption[];
-  transferOptions: JourneyOption[];
-  allOptions: JourneyOption[];
-};
-
 export type SearchResponse = {
   from: string;
   to: string;
@@ -136,7 +92,6 @@ export type SearchResponse = {
   requestedDate?: string;
   showingNextDate?: boolean;
   results: TrackSnapshot[];
-  journeyPlan?: MultiRoutePlan | null;
 };
 
 export type BusTrackingItem = {
