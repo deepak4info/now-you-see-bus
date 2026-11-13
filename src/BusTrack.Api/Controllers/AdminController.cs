@@ -790,6 +790,8 @@ public class AdminController : ControllerBase
         var routes = await _db.Routes.AsNoTracking().Where(r => r.IsActive).OrderBy(r => r.Code).ToListAsync(ct);
         var stops = await _db.RouteStops.AsNoTracking().Include(rs => rs.Stop).OrderBy(rs => rs.SequenceNo).ToListAsync(ct);
         var fares = await _db.FareSlabs.AsNoTracking().Include(f => f.FromStop).Include(f => f.ToStop).ToListAsync(ct);
+        var stopsByRoute = stops.ToLookup(s => s.RouteId);
+        var faresByRoute = fares.ToLookup(f => f.RouteId);
         var createdRows = await _tracking.QueryAuditLogsAsync(2000, actionFilter: "Create", entityFilter: "Route", ct: ct);
         var addedAtById = createdRows
             .Where(a => a.EntityId != null)
@@ -804,7 +806,7 @@ public class AdminController : ControllerBase
             r.DistanceMode,
             distanceKm = r.DistanceKm,
             addedAt = addedAtById.TryGetValue(r.Id.ToString(), out var addedAt) ? addedAt : (DateTime?)null,
-            stops = stops.Where(s => s.RouteId == r.Id).Select(s => new
+            stops = stopsByRoute[r.Id].Select(s => new
             {
                 s.StopId,
                 s.Stop.Name,
@@ -813,7 +815,7 @@ public class AdminController : ControllerBase
                 distanceKm = s.DistanceFromOriginKm,
                 segmentDistanceKm = s.SegmentDistanceKm
             }),
-            fares = fares.Where(f => f.RouteId == r.Id).Select(f => new
+            fares = faresByRoute[r.Id].Select(f => new
             {
                 f.Id,
                 f.FromStopId,

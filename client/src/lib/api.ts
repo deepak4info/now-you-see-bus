@@ -85,27 +85,82 @@ function safeJson(text: string) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-export function useQuery<T>(path: string | null) {
-  const [data, setData] = useState<T | null>(null);
+// In-memory client cache for static reference data (e.g. stops list)
+const clientApiCache = new Map<string, { data: unknown; timestamp: number }>();
+const DEFAULT_CLIENT_CACHE_TTL_MS = 60_000; // 1 minute
+
+export function useQuery<T>(path: string | null, options?: { cacheTtlMs?: number }) {
+  const cacheTtl = options?.cacheTtlMs ?? (path === "/api/stops" ? DEFAULT_CLIENT_CACHE_TTL_MS : 0);
+
+  const [data, setData] = useState<T | null>(() => {
+    if (!path || cacheTtl <= 0) return null;
+    const hit = clientApiCache.get(path);
+    if (hit && Date.now() - hit.timestamp < cacheTtl) {
+      return hit.data as T;
+    }
+    return null;
+  });
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(Boolean(path));
+  const [loading, setLoading] = useState(data === null && Boolean(path));
 
   const reload = useCallback(async () => {
     if (!path) return;
     setLoading(true);
     setError(null);
     try {
-      setData(await api<T>(path));
+      const result = await api<T>(path);
+      if (cacheTtl > 0) {
+        clientApiCache.set(path, { data: result, timestamp: Date.now() });
+      }
+      setData(result);
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [path, cacheTtl]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (!path) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (cacheTtl > 0) {
+      const hit = clientApiCache.get(path);
+      if (hit && Date.now() - hit.timestamp < cacheTtl) {
+        setData(hit.data as T);
+        setLoading(false);
+        return;
+      }
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+
+    api<T>(path, { signal: controller.signal })
+      .then((res) => {
+        if (cacheTtl > 0) {
+          clientApiCache.set(path, { data: res, timestamp: Date.now() });
+        }
+        setData(res);
+      })
+      .catch((err) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Request failed");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [path, cacheTtl]);
 
   return { data, error, loading, reload, setData };
 }

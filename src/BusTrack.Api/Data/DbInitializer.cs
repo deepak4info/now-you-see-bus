@@ -32,8 +32,10 @@ public static class DbInitializer
                     await OpenWithRetry(conn, logger);
                     var schemaPath = Path.Combine(dir, "001_schema.sql");
                     var seedPath = Path.Combine(dir, "002_seed.sql");
+                    var perfPath = Path.Combine(dir, "004_performance_indexes.sql");
                     if (File.Exists(schemaPath)) await ExecuteScript(conn, schemaPath);
                     if (File.Exists(seedPath)) await ExecuteScript(conn, seedPath);
+                    if (File.Exists(perfPath)) await ExecuteScript(conn, perfPath);
                 }
             }
             catch (Exception ex)

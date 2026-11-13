@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
@@ -10,6 +11,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.IdentityModel.Tokens;
@@ -65,10 +67,35 @@ builder.Services.AddSingleton<TelemetryStateStore>();
 builder.Services.AddScoped<TelemetryService>();
 builder.Services.AddSingleton<PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtIssuer>();
+builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<TripSimulator>();
 builder.Services.AddHostedService<TripArchiveHostedService>();
 builder.Services.AddSignalR();
 builder.Services.AddControllers();
+
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[]
+    {
+        "application/json",
+        "text/plain",
+        "application/javascript",
+        "text/css",
+        "image/svg+xml"
+    });
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -237,6 +264,7 @@ app.UseSwaggerUI(c =>
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "WhereIsMyBus API v1");
 });
 
+app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
