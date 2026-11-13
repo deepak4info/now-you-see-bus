@@ -54,6 +54,20 @@ public class PassengerController : ControllerBase
         }));
     }
 
+    [HttpGet("stops/{idOrCode}/timetable")]
+    [HttpGet("stops/{idOrCode}/board")]
+    public async Task<IActionResult> StopTimetable(string idOrCode, [FromQuery] DateOnly? date, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(idOrCode))
+            return BadRequest(new { message = "Choose a stop or scan a valid stop QR code." });
+
+        var timetable = await _tracking.GetStopTimetableAsync(idOrCode, date, ct);
+        if (timetable is null)
+            return NotFound(new { message = $"No bus stand or stop found for \"{idOrCode.Trim()}\"." });
+
+        return Ok(timetable);
+    }
+
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] string from, [FromQuery] string to, [FromQuery] DateOnly? date, CancellationToken ct)
     {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { ArrowUpRight, MapPin, Phone, Search, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ArrowUpRight, MapPin, Phone, QrCode, Search, X } from "lucide-react";
 
 type BusStandContact = {
   district: string;
@@ -124,7 +125,16 @@ export function EnquiryNumbersPage() {
                     <MapPin aria-hidden="true" className="h-4 w-4 shrink-0 text-primary sm:hidden" />
                     {district}
                   </span>
-                  <span className="font-semibold text-ink">{stand}</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-ink">{stand}</span>
+                    <Link
+                      to={`/stop/${encodeURIComponent(stand)}`}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/20 transition-colors"
+                      title={`Open live timetable board for ${stand}`}
+                    >
+                      <QrCode size={11} /> Live Board ↗
+                    </Link>
+                  </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
                     {numbers.map((number) => (
                       <a

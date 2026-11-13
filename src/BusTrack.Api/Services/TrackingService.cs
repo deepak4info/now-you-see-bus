@@ -84,6 +84,251 @@ public class TrackingService
             };
     }
 
+    public async Task<StopTimetableDto?> GetStopTimetableAsync(string idOrCode, DateOnly? date = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(idOrCode)) return null;
+        var query = idOrCode.Trim();
+
+        // Find Stop by Id, Code or Name
+        Stop? stop = null;
+        if (int.TryParse(query, out var stopId))
+        {
+            stop = await _db.Stops.AsNoTracking().FirstOrDefaultAsync(s => s.Id == stopId && s.IsActive, ct);
+        }
+
+        if (stop is null)
+        {
+            stop = await FindStop(query, ct);
+        }
+
+        if (stop is null) return null;
+
+        var targetDate = date ?? IndiaClock.Today();
+        var nowIst = IndiaClock.Now();
+        var dayIndex = IndiaClock.DayIndex(targetDate);
+
+        // Find all route stops that include this stop
+        var routeStopsAtThisStop = await _db.RouteStops.AsNoTracking()
+            .Where(rs => rs.StopId == stop.Id)
+            .ToListAsync(ct);
+
+        var routeIds = routeStopsAtThisStop.Select(rs => rs.RouteId).Distinct().ToList();
+        if (routeIds.Count == 0)
+        {
+            return new StopTimetableDto(
+                new StopSummaryDto(stop.Id, stop.Name, stop.Code, stop.City, stop.Address, stop.Latitude, stop.Longitude),
+                targetDate.ToString("yyyy-MM-dd"),
+                IndiaClock.Clock(TimeOnly.FromDateTime(nowIst)),
+                new StopStatsDto(0, 0, 0),
+                new(),
+                new()
+            );
+        }
+
+        // Load all active routes serving this stop with their operators
+        var routes = await _db.Routes.AsNoTracking()
+            .Include(r => r.Operator)
+            .Where(r => routeIds.Contains(r.Id) && r.IsActive)
+            .ToListAsync(ct);
+
+        // Load all RouteStops for these routes to determine sequence, origin, destination, and downstream stops
+        var allRouteStops = await _db.RouteStops.AsNoTracking()
+            .Include(rs => rs.Stop)
+            .Where(rs => routeIds.Contains(rs.RouteId) && rs.Stop.IsActive)
+            .OrderBy(rs => rs.RouteId)
+            .ThenBy(rs => rs.SequenceNo)
+            .ToListAsync(ct);
+
+        var stopsByRoute = allRouteStops
+            .GroupBy(rs => rs.RouteId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.SequenceNo).ToList());
+
+        // Load all schedules for these routes
+        var schedules = await _db.Schedules.AsNoTracking()
+            .Include(s => s.Bus!).ThenInclude(b => b.Operator)
+            .Include(s => s.Route)
+            .Where(s => routeIds.Contains(s.RouteId) && s.IsActive && s.BusId != null)
+            .ToListAsync(ct);
+
+        schedules = schedules.Where(s => RunsOn(s.ServiceDays, dayIndex)).ToList();
+
+        // Load today's trips and stop ETAs
+        var scheduleIds = schedules.Select(s => s.Id).ToList();
+        var trips = await QueryTrips()
+            .Include(t => t.Bus)
+            .Where(t => scheduleIds.Contains(t.ScheduleId) && t.ServiceDate == targetDate)
+            .ToListAsync(ct);
+
+        var tripIds = trips.Select(t => t.Id).ToList();
+        var stopEtas = tripIds.Count > 0
+            ? await _db.TripStopEtas.AsNoTracking()
+                .Where(e => tripIds.Contains(e.TripId) && e.StopId == stop.Id)
+                .ToListAsync(ct)
+            : new();
+        var etasByTrip = stopEtas.ToDictionary(e => e.TripId);
+
+        var upcomingBuses = new List<StopArrivalDto>();
+        var totalBusesToday = 0;
+
+        foreach (var schedule in schedules)
+        {
+            if (!stopsByRoute.TryGetValue(schedule.RouteId, out var routeStopList) || routeStopList.Count == 0)
+                continue;
+
+            var currentStopIndex = routeStopList.FindIndex(s => s.StopId == stop.Id);
+            if (currentStopIndex < 0) continue;
+
+            totalBusesToday++;
+
+            var currentStopRecord = routeStopList[currentStopIndex];
+            var originStopName = routeStopList[0].Stop?.Name ?? "Origin";
+            var terminusStopName = routeStopList[^1].Stop?.Name ?? "Terminus";
+
+            // Calculate scheduled arrival at this stop
+            var travelOffsetMinutes = Geo.EtaMinutes((double)currentStopRecord.DistanceFromOriginKm);
+            var scheduledArrivalAtStop = schedule.DepartureTime.Add(TimeSpan.FromMinutes(travelOffsetMinutes));
+            var scheduledDateTimeIst = targetDate.ToDateTime(scheduledArrivalAtStop);
+
+            var trip = trips.FirstOrDefault(t => t.ScheduleId == schedule.Id);
+            etasByTrip.TryGetValue(trip?.Id ?? -1, out var etaRecord);
+
+            var isLive = trip is not null && (trip.Status == "Running" || trip.Status == "InProgress");
+            int? delayMinutes = etaRecord?.DelayMinutes;
+            if (delayMinutes == null && trip is not null && trip.StartedAt.HasValue)
+            {
+                var origDep = targetDate.ToDateTime(schedule.DepartureTime);
+                delayMinutes = (int)Math.Max(0, (trip.StartedAt.Value - origDep).TotalMinutes);
+            }
+
+            DateTime? estimatedDateTime = delayMinutes.HasValue && delayMinutes.Value != 0
+                ? scheduledDateTimeIst.AddMinutes(delayMinutes.Value)
+                : scheduledDateTimeIst;
+
+            var effectiveDateTime = estimatedDateTime ?? scheduledDateTimeIst;
+
+            string status;
+            if (trip?.Status == "Completed" || etaRecord?.Status == "Departed" || effectiveDateTime < nowIst.AddMinutes(-10))
+            {
+                status = "Departed";
+            }
+            else if (isLive && effectiveDateTime <= nowIst.AddMinutes(15))
+            {
+                status = "Approaching";
+            }
+            else if (isLive)
+            {
+                status = "Live";
+            }
+            else if (delayMinutes.HasValue && delayMinutes.Value > 5)
+            {
+                status = "Delayed";
+            }
+            else
+            {
+                status = "Scheduled";
+            }
+
+            int? etaMinutes = null;
+            if (status != "Departed")
+            {
+                etaMinutes = Math.Max(0, (int)Math.Round((effectiveDateTime - nowIst).TotalMinutes));
+            }
+
+            var fleet = trip?.Bus?.FleetNumber ?? schedule.Bus?.FleetNumber ?? "Bus";
+            var regNo = trip?.Bus?.RegistrationNumber ?? schedule.Bus?.RegistrationNumber ?? "";
+            var busType = trip?.Bus?.BusType ?? schedule.Bus?.BusType ?? "Standard";
+            var opName = schedule.Bus?.Operator?.Name ?? schedule.Route?.Operator?.Name ?? "Haryana Roadways";
+
+            var trackUrl = $"/track/{Uri.EscapeDataString(fleet)}?from={Uri.EscapeDataString(stop.Name)}&to={Uri.EscapeDataString(terminusStopName)}&date={targetDate:yyyy-MM-dd}";
+
+            upcomingBuses.Add(new StopArrivalDto(
+                schedule.Id,
+                trip?.Id,
+                schedule.RouteId,
+                schedule.Route?.Code ?? "",
+                schedule.Route?.Name ?? "",
+                originStopName,
+                terminusStopName,
+                schedule.BusId,
+                fleet,
+                regNo,
+                busType,
+                opName,
+                IndiaClock.Clock(scheduledArrivalAtStop),
+                estimatedDateTime.HasValue && delayMinutes.HasValue && delayMinutes.Value != 0 ? IndiaClock.Clock(TimeOnly.FromDateTime(estimatedDateTime.Value)) : null,
+                status,
+                delayMinutes,
+                etaMinutes,
+                isLive,
+                trackUrl
+            ));
+        }
+
+        // Sort upcoming buses: live and approaching first, then by scheduled time
+        upcomingBuses = upcomingBuses
+            .OrderBy(b => b.Status == "Departed" ? 2 : 1)
+            .ThenBy(b => b.EtaMinutes ?? 9999)
+            .ThenBy(b => b.ScheduledTime)
+            .ToList();
+
+        // Build Routes Summary
+        var routeSummaries = new List<StopRouteSummaryDto>();
+        foreach (var route in routes.OrderBy(r => r.Code))
+        {
+            if (!stopsByRoute.TryGetValue(route.Id, out var routeStopList) || routeStopList.Count == 0)
+                continue;
+
+            var currentStopIndex = routeStopList.FindIndex(s => s.StopId == stop.Id);
+            if (currentStopIndex < 0) continue;
+
+            var routeSchedules = schedules.Where(s => s.RouteId == route.Id).OrderBy(s => s.DepartureTime).ToList();
+            if (routeSchedules.Count == 0) continue;
+
+            var currentStopRecord = routeStopList[currentStopIndex];
+            var originStopName = routeStopList[0].Stop?.Name ?? "Origin";
+            var terminusStopName = routeStopList[^1].Stop?.Name ?? "Terminus";
+            var isOrigin = currentStopIndex == 0;
+            var isTerminus = currentStopIndex == routeStopList.Count - 1;
+
+            var downstreamStops = routeStopList
+                .Skip(currentStopIndex + 1)
+                .Select(s => s.Stop?.Name ?? "")
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            var offsetMins = Geo.EtaMinutes((double)currentStopRecord.DistanceFromOriginKm);
+            var firstTime = routeSchedules.First().DepartureTime.Add(TimeSpan.FromMinutes(offsetMins));
+            var lastTime = routeSchedules.Last().DepartureTime.Add(TimeSpan.FromMinutes(offsetMins));
+
+            routeSummaries.Add(new StopRouteSummaryDto(
+                route.Id,
+                route.Code,
+                route.Name,
+                route.Operator?.Name ?? "Haryana Roadways",
+                originStopName,
+                terminusStopName,
+                currentStopRecord.SequenceNo,
+                isOrigin,
+                isTerminus,
+                downstreamStops,
+                routeSchedules.Count,
+                IndiaClock.Clock(firstTime),
+                IndiaClock.Clock(lastTime)
+            ));
+        }
+
+        var upcomingCount = upcomingBuses.Count(b => b.Status != "Departed");
+
+        return new StopTimetableDto(
+            new StopSummaryDto(stop.Id, stop.Name, stop.Code, stop.City, stop.Address, stop.Latitude, stop.Longitude),
+            targetDate.ToString("yyyy-MM-dd"),
+            IndiaClock.Clock(TimeOnly.FromDateTime(nowIst)),
+            new StopStatsDto(totalBusesToday, upcomingCount, routeSummaries.Count),
+            upcomingBuses,
+            routeSummaries
+        );
+    }
+
     public async Task<List<TrackSnapshotDto>> SearchAsync(string from, string to, DateOnly date, CancellationToken ct = default) =>
         (await SearchRouteAsync(from, to, date, ct: ct)).Results;
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,7 +11,8 @@ import type { CommunityUpdateItem, TrackSnapshot } from "@/lib/types";
 import { HubConnectionBuilder } from "@microsoft/signalr";
 import { MapView } from "@/components/MapView";
 import { StatusBadge } from "@/components/StatusBadge";
-import { AlertCircle, ArrowDown, ArrowUp, BusFront, Check, CheckCircle2, ChevronDown, Edit3, GripVertical, IndianRupee, MapPin, MessageSquare, Route as RouteIcon, Search, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
+import { StopQrModal } from "@/components/StopQrModal";
+import { AlertCircle, ArrowDown, ArrowUp, BusFront, Check, CheckCircle2, ChevronDown, Edit3, GripVertical, IndianRupee, MapPin, MessageSquare, QrCode, Route as RouteIcon, Search, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 
 type Operator = { id: number; name: string; code: string; contactName: string | null; phone: string | null; email: string | null };
 type Bus = { id: number; operatorId: number; operatorName: string; fleetNumber: string; registrationNumber: string; model: string | null; capacity: number; busType: string; assignedDriverId: number | null; driverName: string | null };
@@ -851,6 +853,7 @@ export function StopsPage() {
   const [cleaning, setCleaning] = useState(false);
   const [cleanMessage, setCleanMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [qrStop, setQrStop] = useState<Stop | null>(null);
 
   // Deduplicate stops in-memory so only unique records are displayed
   const uniqueStops = (query.data ?? []).reduce<Stop[]>((acc, row) => {
@@ -1091,6 +1094,12 @@ export function StopsPage() {
               <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{row.city || "—"}</td>
               <td className="px-4 py-2.5 text-right whitespace-nowrap">
                 <div className="inline-flex items-center justify-end gap-1">
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" onClick={() => setQrStop(row)}>
+                    <QrCode size={12} className="text-primary" /> QR
+                  </Button>
+                  <Button size="sm" variant="ghost" asChild className="h-7 px-2 text-xs">
+                    <Link to={`/stop/${row.code}`} target="_blank">Board ↗</Link>
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => edit(row)}>Edit</Button>
                   <Button size="sm" variant="ghost" disabled={removingStopId !== null} onClick={() => void remove(row)}>
                     {removingStopId === row.id ? "Removing…" : "Remove"}
@@ -1151,6 +1160,21 @@ export function StopsPage() {
           <Button onClick={() => void save()}>Save</Button>
         </DialogContent>
       </Dialog>
+      {qrStop && (
+        <StopQrModal
+          stop={{
+            id: qrStop.id,
+            name: qrStop.name,
+            code: qrStop.code,
+            city: qrStop.city,
+            address: qrStop.address,
+            latitude: Number(qrStop.latitude),
+            longitude: Number(qrStop.longitude),
+          }}
+          isOpen={Boolean(qrStop)}
+          onClose={() => setQrStop(null)}
+        />
+      )}
     </Page>
   );
 }

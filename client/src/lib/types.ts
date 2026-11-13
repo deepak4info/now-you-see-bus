@@ -252,3 +252,67 @@ export type CommunityUpdateItem = {
   verifiedBy: string | null;
   createdAt: string;
 };
+
+export type StopSummary = {
+  id: number;
+  name: string;
+  code: string;
+  city: string | null;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+};
+
+export type StopStats = {
+  totalBusesToday: number;
+  upcomingBuses: number;
+  activeRoutes: number;
+};
+
+export type StopArrival = {
+  scheduleId: number;
+  tripId: number | null;
+  routeId: number;
+  routeCode: string;
+  routeName: string;
+  originStop: string;
+  destinationStop: string;
+  busId: number | null;
+  fleetNumber: string;
+  registrationNumber: string;
+  busType: string | null;
+  operatorName: string;
+  scheduledTime: string;
+  estimatedTime: string | null;
+  status: "Live" | "Approaching" | "OnTime" | "Delayed" | "Scheduled" | "Departed" | string;
+  delayMinutes: number | null;
+  etaMinutes: number | null;
+  isLive: boolean;
+  trackUrl: string;
+};
+
+export type StopRouteSummary = {
+  routeId: number;
+  routeCode: string;
+  routeName: string;
+  operatorName: string;
+  originStop: string;
+  destinationStop: string;
+  stopSequence: number;
+  isOrigin: boolean;
+  isTerminus: boolean;
+  downstreamStops: string[];
+  dailyTripsCount: number;
+  firstBusTime: string;
+  lastBusTime: string;
+};
+
+export type StopTimetableResponse = {
+  stop: StopSummary;
+  serviceDate: string;
+  currentTimeIst: string;
+  stats: StopStats;
+  upcomingBuses: StopArrival[];
+  routes: StopRouteSummary[];
+};
+

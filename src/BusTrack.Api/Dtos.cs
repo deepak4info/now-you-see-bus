@@ -397,3 +397,67 @@ public record UpdateBusReportStatusRequest(
     bool PublishAlert = false
 );
 
+public record StopTimetableDto(
+    StopSummaryDto Stop,
+    string ServiceDate,
+    string CurrentTimeIst,
+    StopStatsDto Stats,
+    List<StopArrivalDto> UpcomingBuses,
+    List<StopRouteSummaryDto> Routes
+);
+
+public record StopSummaryDto(
+    int Id,
+    string Name,
+    string Code,
+    string? City,
+    string? Address,
+    decimal Latitude,
+    decimal Longitude
+);
+
+public record StopStatsDto(
+    int TotalBusesToday,
+    int UpcomingBuses,
+    int ActiveRoutes
+);
+
+public record StopArrivalDto(
+    int ScheduleId,
+    int? TripId,
+    int RouteId,
+    string RouteCode,
+    string RouteName,
+    string OriginStop,
+    string DestinationStop,
+    int? BusId,
+    string FleetNumber,
+    string RegistrationNumber,
+    string? BusType,
+    string OperatorName,
+    string ScheduledTime,
+    string? EstimatedTime,
+    string Status,
+    int? DelayMinutes,
+    int? EtaMinutes,
+    bool IsLive,
+    string TrackUrl
+);
+
+public record StopRouteSummaryDto(
+    int RouteId,
+    string RouteCode,
+    string RouteName,
+    string OperatorName,
+    string OriginStop,
+    string DestinationStop,
+    int StopSequence,
+    bool IsOrigin,
+    bool IsTerminus,
+    List<string> DownstreamStops,
+    int DailyTripsCount,
+    string FirstBusTime,
+    string LastBusTime
+);
+
+
