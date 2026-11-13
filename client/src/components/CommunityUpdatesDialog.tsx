@@ -14,14 +14,16 @@ export function CommunityUpdatesDialog({
   initialFleet = "",
   initialRoute = "",
   initialStop = "",
+  initialTab = "verified",
 }: {
   isOpen: boolean;
   onClose: () => void;
   initialFleet?: string;
   initialRoute?: string;
   initialStop?: string;
+  initialTab?: DialogTab;
 }) {
-  const [tab, setTab] = useState<DialogTab>("verified");
+  const [tab, setTab] = useState<DialogTab>(initialTab);
   const [filterCategory, setFilterCategory] = useState("all");
 
   // Query verified community updates
@@ -38,7 +40,14 @@ export function CommunityUpdatesDialog({
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (isOpen) {
+      setTab(initialTab);
+      setFleetNumber(initialFleet);
+      setStopName(initialStop);
+      setFeedback(null);
+    }
+  }, [isOpen, initialTab, initialFleet, initialStop]);
 
   async function handleSubmit(category: string) {
     if (!description.trim() || description.trim().length < 5) {

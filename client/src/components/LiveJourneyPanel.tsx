@@ -147,6 +147,7 @@ export function LiveJourneyPanel({
 
   // Quick report & verified community updates state
   const [communityOpen, setCommunityOpen] = useState(false);
+  const [dialogTab, setDialogTab] = useState<"verified" | "delay">("verified");
   const [reportOpen, setReportOpen] = useState(false);
   const [reportCategory, setReportCategory] = useState("DelayReport");
   const [reportStopName, setReportStopName] = useState("");
@@ -514,7 +515,10 @@ export function LiveJourneyPanel({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => setCommunityOpen(true)}
+            onClick={() => {
+              setDialogTab("verified");
+              setCommunityOpen(true);
+            }}
             className="flex-1"
           >
             <ShieldCheck className="mr-1.5 h-3.5 w-3.5 text-emerald-600" /> Community Updates
@@ -523,7 +527,10 @@ export function LiveJourneyPanel({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => setCommunityOpen(true)}
+            onClick={() => {
+              setDialogTab("delay");
+              setCommunityOpen(true);
+            }}
             className="flex-1"
           >
             <Flag className="mr-1.5 h-3.5 w-3.5 text-amber-600" /> Report Issue
@@ -537,6 +544,7 @@ export function LiveJourneyPanel({
         initialFleet={snapshot.fleetNumber}
         initialRoute={snapshot.routeCode}
         initialStop={snapshot.currentStop ?? snapshot.nextStop ?? ""}
+        initialTab={dialogTab}
       />
     </div>
   );
