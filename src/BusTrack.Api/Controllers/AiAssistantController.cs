@@ -1,11 +1,14 @@
 using BusTrack.Api.Application.AI.DTOs;
 using BusTrack.Api.Application.AI.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace BusTrack.Api.Controllers;
 
 [ApiController]
 [Route("api/ai")]
+[EnableRateLimiting("ai-limit")]
 public class AiAssistantController : ControllerBase
 {
     private readonly IAiAssistantService _aiAssistantService;
@@ -38,7 +41,7 @@ public class AiAssistantController : ControllerBase
                 Language: request.Language ?? "hi",
                 Intent: "error",
                 Success: false,
-                ErrorMessage: ex.Message
+                ErrorMessage: "An error occurred while processing your travel query."
             ));
         }
     }
@@ -51,6 +54,7 @@ public class AiAssistantController : ControllerBase
     }
 
     [HttpGet("admin-analytics")]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult<AiAdminAnalyticsDto>> GetAdminAnalytics(CancellationToken ct)
     {
         var analytics = await _aiAssistantService.GetAdminAnalyticsAsync(ct);

@@ -48,7 +48,7 @@ public class GetAdminAnalyticsFunction
 
         var today = DateOnly.FromDateTime(IndiaClock.Now());
         var tripsToday = await _db.Trips.CountAsync(t => t.ServiceDate == today, ct);
-        var activeTripsNow = await _db.Trips.CountAsync(t => t.ServiceDate == today && t.Status == "Active", ct);
+        var activeTripsNow = await _db.Trips.CountAsync(t => t.ServiceDate == today && (t.Status == "Running" || t.Status == "Active"), ct);
 
         // Get live tracking to count delayed buses
         var liveSnapshots = await _trackingService.GetLiveTrackingAsync(null, null, ct);

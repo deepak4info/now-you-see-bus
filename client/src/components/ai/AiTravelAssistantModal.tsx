@@ -90,6 +90,11 @@ export function AiTravelAssistantModal({
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef(messages);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -229,7 +234,7 @@ export function AiTravelAssistantModal({
     setLoading(true);
 
     try {
-      const historyPayload = messages.slice(-6).map((m) => ({
+      const historyPayload = messagesRef.current.slice(-6).map((m) => ({
         role: m.role,
         content: m.content,
       }));
@@ -664,6 +669,7 @@ function AiBusCardItem({ bus, onCloseModal }: { bus: AiBusCard; onCloseModal: ()
 }
 
 function AiJourneyPlanItem({ plan, onCloseModal }: { plan: any; onCloseModal: () => void }) {
+  const navigate = useNavigate();
   const options = (plan.allOptions || plan.AllOptions || []) as JourneyOption[];
   if (!options || options.length === 0) return null;
 
@@ -710,7 +716,7 @@ function AiJourneyPlanItem({ plan, onCloseModal }: { plan: any; onCloseModal: ()
           className="w-full h-8 text-xs bg-pine hover:bg-pine/90 text-white"
           onClick={() => {
             onCloseModal();
-            window.location.href = `/search?from=${encodeURIComponent(plan.from || plan.From)}&to=${encodeURIComponent(plan.to || plan.To)}`;
+            navigate(`/search?from=${encodeURIComponent(plan.from || plan.From)}&to=${encodeURIComponent(plan.to || plan.To)}`);
           }}
         >
           View Full Journey Schedule

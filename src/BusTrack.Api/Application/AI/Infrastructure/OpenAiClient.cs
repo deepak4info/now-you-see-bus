@@ -20,6 +20,7 @@ public class OpenAiClient
     private readonly ILogger<OpenAiClient> _logger;
     private readonly string? _apiKey;
     private readonly string _model;
+    private readonly string _baseUrl;
 
     public OpenAiClient(HttpClient http, IConfiguration config, ILogger<OpenAiClient> logger)
     {
@@ -28,6 +29,7 @@ public class OpenAiClient
         _logger = logger;
         _apiKey = config["OpenAi:ApiKey"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         _model = config["OpenAi:Model"] ?? "gpt-4o-mini";
+        _baseUrl = (config["OpenAi:BaseUrl"] ?? "https://api.openai.com/v1").TrimEnd('/');
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
@@ -50,7 +52,7 @@ public class OpenAiClient
                 ["temperature"] = 0.2
             };
 
-            var req = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/chat/completions")
             {
                 Content = new StringContent(requestBody.ToJsonString(), Encoding.UTF8, "application/json")
             };

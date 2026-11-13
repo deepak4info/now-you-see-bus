@@ -122,6 +122,12 @@ builder.Services.AddRateLimiter(options =>
         opt.Window = TimeSpan.FromMinutes(1);
         opt.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("ai-limit", opt =>
+    {
+        opt.PermitLimit = 30;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 2;
+    });
 });
 
 builder.Services.AddEndpointsApiExplorer();

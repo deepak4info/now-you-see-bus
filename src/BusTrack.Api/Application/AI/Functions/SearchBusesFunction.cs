@@ -69,7 +69,7 @@ public class SearchBusesFunction
                 ArrivalTime: s.EstimatedArrivalTime ?? s.DepartureTime,
                 DurationMinutes: durationMinutes,
                 EstimatedFare: s.Fare ?? 0m,
-                IsLive: s.OperationsLive && s.Status == "Active",
+                IsLive: s.OperationsLive && (s.Status == "Running" || s.Status == "Active" || s.Latitude != null),
                 DelayMinutes: s.DelayMinutes,
                 DelayStatus: s.DelayStatus ?? (s.DelayMinutes > 5 ? $"{s.DelayMinutes}m delay" : "On Time"),
                 NextStop: s.NextStop,

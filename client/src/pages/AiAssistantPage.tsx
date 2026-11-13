@@ -75,6 +75,11 @@ export function AiAssistantPage() {
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef(messages);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     const win = window as IWindowSpeechRecognition;
@@ -188,7 +193,7 @@ export function AiAssistantPage() {
     setLoading(true);
 
     try {
-      const historyPayload = messages.slice(-6).map((m) => ({
+      const historyPayload = messagesRef.current.slice(-6).map((m) => ({
         role: m.role,
         content: m.content,
       }));

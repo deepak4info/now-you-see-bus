@@ -389,25 +389,22 @@ CRITICAL RULES:
             return (CleanStopName(enToMatch.Groups[1].Value), CleanStopName(enToMatch.Groups[2].Value));
         }
 
-        // Check dictionary containment
-        string? foundA = null;
-        string? foundB = null;
-        foreach (var key in HindiToEnglishStops.Keys)
-        {
-            if (text.Contains(key, StringComparison.OrdinalIgnoreCase))
+        // Check dictionary containment ordered by position of appearance in sentence
+        var matches = HindiToEnglishStops
+            .Where(kvp => text.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => new
             {
-                if (foundA == null) foundA = HindiToEnglishStops[key];
-                else if (foundB == null && !string.Equals(foundA, HindiToEnglishStops[key], StringComparison.OrdinalIgnoreCase))
-                {
-                    foundB = HindiToEnglishStops[key];
-                    break;
-                }
-            }
-        }
+                Stop = kvp.Value,
+                Index = text.IndexOf(kvp.Key, StringComparison.OrdinalIgnoreCase)
+            })
+            .OrderBy(x => x.Index)
+            .Select(x => x.Stop)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        if (foundA != null && foundB != null)
+        if (matches.Count >= 2)
         {
-            return (foundA, foundB);
+            return (matches[0], matches[1]);
         }
 
         return (null, null);
@@ -415,13 +412,14 @@ CRITICAL RULES:
 
     private string? ExtractSingleStop(string text)
     {
-        foreach (var kvp in HindiToEnglishStops)
+        // Check longest matching keys first so "फतेहाबाद बस स्टैंड" matches before "फतेहाबाद"
+        foreach (var kvp in HindiToEnglishStops.OrderByDescending(k => k.Key.Length))
         {
             if (text.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
                 return kvp.Value;
         }
 
-        var match = Regex.Match(text, @"\b(Fatehabad|Bhuna|Hisar|Delhi|Hansi|Rohtak|Sirsa|Ratia|Tohana)\b", RegexOptions.IgnoreCase);
+        var match = Regex.Match(text, @"\b(Fatehabad\s+Bus\s+Stand|Fatehabad|Bhuna|Hisar|Delhi\s+ISBT|Delhi|Hansi|Rohtak|Sirsa|Ratia|Tohana)\b", RegexOptions.IgnoreCase);
         return match.Success ? match.Value : null;
     }
 
